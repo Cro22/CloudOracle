@@ -15,6 +15,7 @@ type Config struct {
 	Password string
 	Database string
 }
+type Pool = pgxpool.Pool
 
 func LoadConfigFromEnv() Config {
 	return Config{
