@@ -1,8 +1,10 @@
 package main
 
 import (
+	"CloudOracle/internal/analyzer"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/generator"
+	"CloudOracle/internal/shared"
 	"context"
 	"flag"
 	"fmt"
@@ -28,6 +30,8 @@ func main() {
 		runSeed(ctx, pool, os.Args[2:])
 	case "list":
 		runList(ctx, pool)
+	case "analyze":
+		runAnalyze(ctx, pool)
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -75,5 +79,68 @@ func runList(ctx context.Context, pool *db.Pool) {
 	}
 
 	fmt.Println("-------------------------------------------------------------------------------------")
-	fmt.Printf("Total: %d recursos | Costo mensual: $%.2f\n", len(resources), total)
+	fmt.Printf("Total: %d resources | Monthly cost: $%.2f\n", len(resources), total)
+}
+
+func runAnalyze(ctx context.Context, pool *db.Pool) {
+	resources, err := db.ListResources(ctx, pool)
+	if err != nil {
+		log.Fatalf("Failed to list resources: %v", err)
+	}
+	if len(resources) == 0 {
+		log.Println("No resources to analyze")
+		return
+	}
+	findings := analyzer.Analyze(resources)
+
+	if len(findings) == 0 {
+		log.Println("✓ No findings to report. All looks good")
+		return
+	}
+	var totalWaste float64
+	for _, f := range findings {
+		totalWaste += f.MonthlySavings
+	}
+
+	fmt.Printf("🔍 CloudOracle found %d problems with potential monthly savings of $%.2f\n", len(findings), totalWaste)
+
+	for i, f := range findings {
+		severity := colorSeverity(f.Severity)
+		fmt.Printf("  %d. [%s] %s\n", i+1, severity, f.Description)
+		fmt.Printf("     💡 %s\n", f.Recommendation)
+		fmt.Printf("     💰 Monthly Cost: $%.2f | Potential Monthly Savings: $%.2f\n", f.MonthlyCost, f.MonthlySavings)
+	}
+	fmt.Println("─────────────────────────────────────")
+	fmt.Printf("Summary per service")
+	fmt.Println()
+	printSummaryByService(findings)
+}
+func colorSeverity(s shared.Severity) string {
+	switch s {
+	case shared.SeverityHigh:
+		return "🔴 HIGH"
+	case shared.SeverityMedium:
+		return "🟡 MEDIUM"
+	case shared.SeverityLow:
+		return "🟢 LOW"
+	default:
+		return string(s)
+	}
+}
+func printSummaryByService(findings []shared.Finding) {
+	summary := make(map[string]struct {
+		count   int
+		savings float64
+	})
+	for _, f := range findings {
+		s := summary[f.Service]
+		s.count++
+		s.savings += f.MonthlySavings
+		summary[f.Service] = s
+	}
+
+	for service, s := range summary {
+		fmt.Printf("  %-8s → %d problems, save: $%.2f/month\n", service, s.count, s.savings)
+	}
+	fmt.Println()
 }

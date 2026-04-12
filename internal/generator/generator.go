@@ -76,7 +76,7 @@ func generateEC2(idx int, accountID string, now time.Time) shared.Resource {
 	return shared.Resource{
 		ID:           fmt.Sprintf("i-%d", rand.Uint32()),
 		AccountID:    accountID,
-		Service:      "EC2",
+		Service:      "ec2",
 		ResourceType: instance.Type,
 		Region:       regions[rand.IntN(len(regions))],
 		MonthlyCost:  instance.Cost,
