@@ -8,7 +8,7 @@ import (
 	"codeberg.org/go-pdf/fpdf"
 )
 
-func GeneratePDF(findings []shared.Finding, outputPath string) error {
+func GeneratePDF(findings []shared.Finding, aiSummary string, outputPath string) error {
 	pdf := fpdf.New("P", "mm", "A4", "")
 	pdf.SetMargins(15, 15, 15)
 
@@ -69,6 +69,20 @@ func GeneratePDF(findings []shared.Finding, outputPath string) error {
 		severityCounts[shared.SeverityMedium],
 		severityCounts[shared.SeverityLow]))
 	pdf.Ln(12)
+
+	// === AI EXECUTIVE SUMMARY (si está disponible) ===
+	if aiSummary != "" {
+		pdf.SetFont("Arial", "B", 14)
+		pdf.SetTextColor(30, 30, 30)
+		pdf.Cell(0, 8, "AI Analysis")
+		pdf.Ln(8)
+
+		pdf.SetFont("Arial", "", 10)
+		pdf.SetTextColor(60, 60, 60)
+		pdf.MultiCell(0, 5, aiSummary, "", "L", false)
+		pdf.Ln(8)
+	}
+
 	// === DETAILED FINDINGS TABLE ===
 	pdf.SetFont("Arial", "B", 14)
 	pdf.SetTextColor(30, 30, 30)
@@ -76,16 +90,7 @@ func GeneratePDF(findings []shared.Finding, outputPath string) error {
 	pdf.Ln(10)
 
 	// Table header row
-	pdf.SetFillColor(50, 50, 50)
-	pdf.SetTextColor(255, 255, 255)
-	pdf.SetFont("Arial", "B", 9)
-	pdf.CellFormat(18, 7, "Severity", "1", 0, "C", true, 0, "")
-	pdf.CellFormat(40, 7, "Resource ID", "1", 0, "L", true, 0, "")
-	pdf.CellFormat(20, 7, "Service", "1", 0, "C", true, 0, "")
-	pdf.CellFormat(32, 7, "Type", "1", 0, "L", true, 0, "")
-	pdf.CellFormat(30, 7, "Cost/mo", "1", 0, "R", true, 0, "")
-	pdf.CellFormat(40, 7, "Savings/mo", "1", 0, "R", true, 0, "")
-	pdf.Ln(7)
+	drawTableHeader(pdf)
 
 	// Table data rows
 	pdf.SetFont("Arial", "", 8)
@@ -93,18 +98,7 @@ func GeneratePDF(findings []shared.Finding, outputPath string) error {
 		// Page break if running out of space
 		if pdf.GetY() > 270 {
 			pdf.AddPage()
-
-			// Re-draw the header on the new page so the table stays readable
-			pdf.SetFillColor(50, 50, 50)
-			pdf.SetTextColor(255, 255, 255)
-			pdf.SetFont("Arial", "B", 9)
-			pdf.CellFormat(18, 7, "Severity", "1", 0, "C", true, 0, "")
-			pdf.CellFormat(40, 7, "Resource ID", "1", 0, "L", true, 0, "")
-			pdf.CellFormat(20, 7, "Service", "1", 0, "C", true, 0, "")
-			pdf.CellFormat(32, 7, "Type", "1", 0, "L", true, 0, "")
-			pdf.CellFormat(30, 7, "Cost/mo", "1", 0, "R", true, 0, "")
-			pdf.CellFormat(40, 7, "Savings/mo", "1", 0, "R", true, 0, "")
-			pdf.Ln(7)
+			drawTableHeader(pdf)
 			pdf.SetFont("Arial", "", 8)
 		}
 
@@ -181,4 +175,17 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+func drawTableHeader(pdf *fpdf.Fpdf) {
+	pdf.SetFillColor(50, 50, 50)
+	pdf.SetTextColor(255, 255, 255)
+	pdf.SetFont("Arial", "B", 9)
+	pdf.CellFormat(18, 7, "Severity", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(40, 7, "Resource ID", "1", 0, "L", true, 0, "")
+	pdf.CellFormat(20, 7, "Service", "1", 0, "C", true, 0, "")
+	pdf.CellFormat(32, 7, "Type", "1", 0, "L", true, 0, "")
+	pdf.CellFormat(30, 7, "Cost/mo", "1", 0, "R", true, 0, "")
+	pdf.CellFormat(40, 7, "Savings/mo", "1", 0, "R", true, 0, "")
+	pdf.Ln(7)
 }

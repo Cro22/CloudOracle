@@ -4,9 +4,11 @@ import (
 	"CloudOracle/internal/analyzer"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/generator"
+	"CloudOracle/internal/llm"
 	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -171,9 +173,26 @@ func runReport(ctx context.Context, pool *db.Pool, args []string) {
 		return
 	}
 
+	var aiSummary string
+	provider, err := llm.NewProvider()
+	if err != nil {
+		if errors.Is(err, llm.ErrNoProvider) {
+			log.Println("ℹ No LLM provider configured, skipping AI summary")
+		} else {
+			log.Printf("⚠ LLM provider error: %v (continuing without AI summary)", err)
+		}
+	} else {
+		log.Printf("Generating AI summary using %s...", provider.Name())
+		aiSummary, err = provider.GenerateSummary(ctx, findings)
+		if err != nil {
+			log.Printf("⚠ Failed to generate AI summary: %v", err)
+			aiSummary = ""
+		}
+	}
+
 	log.Printf("Generating PDF with %d findings...", len(findings))
 
-	if err := report.GeneratePDF(findings, *output); err != nil {
+	if err := report.GeneratePDF(findings, aiSummary, *output); err != nil {
 		log.Fatalf("error generating PDF: %v", err)
 	}
 
