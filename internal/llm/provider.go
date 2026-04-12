@@ -11,7 +11,6 @@ var ErrNoProvider = errors.New("no LLM provider configured")
 
 type Provider interface {
 	GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error)
-
 	Name() string
 }
 

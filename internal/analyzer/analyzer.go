@@ -1,6 +1,9 @@
 package analyzer
 
-import "CloudOracle/internal/shared"
+import (
+	"CloudOracle/internal/shared"
+	"slices"
+)
 
 type Rule func(r shared.Resource) *shared.Finding
 
@@ -26,11 +29,7 @@ func Analyze(resources []shared.Resource) []shared.Finding {
 }
 
 func sortBySavings(findings []shared.Finding) {
-	for i := 0; i < len(findings); i++ {
-		for j := i + 1; j < len(findings); j++ {
-			if findings[j].MonthlySavings > findings[i].MonthlySavings {
-				findings[i], findings[j] = findings[j], findings[i]
-			}
-		}
-	}
+	slices.SortFunc(findings, func(a, b shared.Finding) int {
+		return int(b.MonthlySavings*100) - int(a.MonthlySavings*100)
+	})
 }
