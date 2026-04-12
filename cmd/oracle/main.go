@@ -4,6 +4,7 @@ import (
 	"CloudOracle/internal/analyzer"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/generator"
+	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
 	"context"
 	"flag"
@@ -32,6 +33,8 @@ func main() {
 		runList(ctx, pool)
 	case "analyze":
 		runAnalyze(ctx, pool)
+	case "report":
+		runReport(ctx, pool, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -45,6 +48,7 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  oracle seed <account_id> <num_resources>  - Generate and insert random resources for an account")
 	fmt.Println("  oracle list                              - List all resources ordered by monthly cost")
+	fmt.Println("  oracle report --output report.pdf")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, args []string) {
@@ -143,4 +147,35 @@ func printSummaryByService(findings []shared.Finding) {
 		fmt.Printf("  %-8s → %d problems, save: $%.2f/month\n", service, s.count, s.savings)
 	}
 	fmt.Println()
+}
+
+func runReport(ctx context.Context, pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("report", flag.ExitOnError)
+	output := fs.String("output", "cloudoracle-report.pdf", "output PDF file path")
+	fs.Parse(args)
+
+	resources, err := db.ListResources(ctx, pool)
+	if err != nil {
+		log.Fatalf("error loading resources: %v", err)
+	}
+
+	if len(resources) == 0 {
+		fmt.Println("No resources in the database. Run 'oracle seed' first.")
+		return
+	}
+
+	findings := analyzer.Analyze(resources)
+
+	if len(findings) == 0 {
+		fmt.Println("✓ No waste detected. Nothing to report.")
+		return
+	}
+
+	log.Printf("Generating PDF with %d findings...", len(findings))
+
+	if err := report.GeneratePDF(findings, *output); err != nil {
+		log.Fatalf("error generating PDF: %v", err)
+	}
+
+	fmt.Printf("✓ Report generated: %s\n", *output)
 }

@@ -18,11 +18,12 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
   - `lambda-over-provisioned` - Finds Lambda functions with >1GB memory and low invocation counts (LOW severity)
 - **Savings-ranked output** - Findings are sorted by potential monthly savings (highest first)
 - **Service summary** - Aggregated view of findings and potential savings per AWS service
+- **PDF report generation** - Professional executive-style PDF reports with severity-coded tables, recommended actions, and annual savings projections
 
 ## Architecture
 
 ```
-cmd/oracle/main.go          # CLI entry point (seed, list, analyze)
+cmd/oracle/main.go          # CLI entry point (seed, list, analyze, report)
 internal/
   shared/
     resource.go             # Resource domain model
@@ -32,6 +33,8 @@ internal/
   analyzer/
     analyzer.go             # Rule engine: runs all rules, sorts by savings
     rules.go                # Detection rules (pure functions)
+  report/
+    pdf.go                  # PDF report generator (executive summary + findings table)
   db/
     db.go                   # PostgreSQL connection pool (pgx)
     insert.go               # Transactional insert + query logic
@@ -47,6 +50,7 @@ docker-compose.yml          # PostgreSQL 16 setup
 | Language    | Go 1.25                   |
 | Database    | PostgreSQL 16 (Alpine)    |
 | DB Driver   | pgx v5 (connection pool)  |
+| PDF         | go-pdf/fpdf               |
 | Containers  | Docker Compose            |
 
 ## Getting Started
@@ -85,6 +89,18 @@ go run cmd/oracle/main.go list
 ```bash
 go run cmd/oracle/main.go analyze
 ```
+
+### 6. Generate a PDF report
+
+```bash
+go run cmd/oracle/main.go report --output cloudoracle-report.pdf
+```
+
+This generates a professional PDF with:
+- Executive summary (total findings, monthly/annual savings projections)
+- Severity breakdown (HIGH / MEDIUM / LOW)
+- Color-coded findings table with cost and savings per resource
+- Recommended actions for each finding
 
 ### Sample Output
 
@@ -151,6 +167,7 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [ ] Real AWS integration via SDK (replace synthetic data with live resource inventory)
 - [ ] Multi-cloud support (GCP, Azure)
 - [ ] Cost trend tracking over time
+- [x] PDF report generation with executive summary and severity-coded tables
 - [ ] Export findings to JSON/CSV
 - [ ] Slack/email alerting for high-severity findings
 - [ ] Web dashboard with cost visualizations
