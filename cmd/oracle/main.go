@@ -2,8 +2,8 @@ package main
 
 import (
 	"CloudOracle/internal/analyzer"
+	"CloudOracle/internal/cloud"
 	"CloudOracle/internal/db"
-	"CloudOracle/internal/generator"
 	"CloudOracle/internal/llm"
 	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
@@ -61,8 +61,12 @@ func runSeed(ctx context.Context, pool *db.Pool, args []string) {
 	if err != nil {
 		log.Fatalf("Failed to parse flags: %v", err)
 	}
-	log.Println("Generating resources...")
-	resources := generator.GenerateResources(*count, *account)
+	var provider cloud.CloudProvider = cloud.NewSyntheticProvider(*count, *account)
+	log.Printf("Fetching resources from provider: %s", provider.Name())
+	resources, err := provider.FetchResources(ctx)
+	if err != nil {
+		log.Fatalf("Failed to fetch resources from %s provider: %v", provider.Name(), err)
+	}
 	if err := db.InsertResources(ctx, pool, resources); err != nil {
 		log.Fatalf("Failed to insert resources: %v", err)
 	}
