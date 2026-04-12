@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloudoracle-db
+    environment:
+      POSTGRES_USER: oracle
+      POSTGRES_PASSWORD: oracle_dev
+      POSTGRES_DB: cloudoracle
+    ports:
+      - "5432:5432"
+    volumes:
+      - oracle_data:/var/lib/postgresql/data
+
+volumes:
+  oracle_data:
