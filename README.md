@@ -18,11 +18,13 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
   - `lambda-over-provisioned` - Finds Lambda functions with >1GB memory and low invocation counts (LOW severity)
 - **Savings-ranked output** - Findings are sorted by potential monthly savings (highest first)
 - **Service summary** - Aggregated view of findings and potential savings per AWS service
+- **PDF report generation** - Professional executive-style PDF reports with severity-coded tables, recommended actions, and annual savings projections
+- **LLM-powered executive summaries** - Pluggable provider layer (Gemini, Claude, OpenAI) that turns raw findings into a CTO/CFO-ready narrative embedded directly into the PDF report
 
 ## Architecture
 
 ```
-cmd/oracle/main.go          # CLI entry point (seed, list, analyze)
+cmd/oracle/main.go          # CLI entry point (seed, list, analyze, report)
 internal/
   shared/
     resource.go             # Resource domain model
@@ -32,6 +34,14 @@ internal/
   analyzer/
     analyzer.go             # Rule engine: runs all rules, sorts by savings
     rules.go                # Detection rules (pure functions)
+  report/
+    pdf.go                  # PDF report generator (executive summary + findings table)
+  llm/
+    provider.go             # Provider interface + env-based factory (Gemini / Claude / OpenAI)
+    prompt.go               # Shared prompt builder (findings -> structured analysis)
+    gemini.go               # Google Gemini client (gemini-2.5-flash)
+    claude.go               # Anthropic Claude client (claude-haiku-4-5)
+    openai.go               # OpenAI client (gpt-4o-mini)
   db/
     db.go                   # PostgreSQL connection pool (pgx)
     insert.go               # Transactional insert + query logic
@@ -47,6 +57,8 @@ docker-compose.yml          # PostgreSQL 16 setup
 | Language    | Go 1.25                   |
 | Database    | PostgreSQL 16 (Alpine)    |
 | DB Driver   | pgx v5 (connection pool)  |
+| PDF         | go-pdf/fpdf               |
+| LLM         | Gemini / Claude / OpenAI  |
 | Containers  | Docker Compose            |
 
 ## Getting Started
@@ -86,6 +98,45 @@ go run cmd/oracle/main.go list
 go run cmd/oracle/main.go analyze
 ```
 
+### 6. Generate a PDF report
+
+```bash
+go run cmd/oracle/main.go report --output cloudoracle-report.pdf
+```
+
+This generates a professional PDF with:
+- Executive summary (total findings, monthly/annual savings projections)
+- Severity breakdown (HIGH / MEDIUM / LOW)
+- Color-coded findings table with cost and savings per resource
+- Recommended actions for each finding
+- **AI-generated narrative** (when an LLM provider is configured) — 3-4 paragraph executive summary written for a CTO/CFO audience, focused on financial impact, highest-priority problems, and recommended next steps
+
+![CloudOracle PDF report example](examplepdf.png)
+
+### 7. (Optional) Enable the LLM-powered executive summary
+
+The `report` command will automatically call an LLM provider if any supported API key is present in the environment. No flags required — just export a key and run `report` again. If no key is configured, the PDF is still generated without the narrative section.
+
+| Provider | Env variable        | Default model        |
+|----------|---------------------|----------------------|
+| Gemini   | `GEMINI_API_KEY`    | `gemini-2.5-flash`   |
+| Claude   | `ANTHROPIC_API_KEY` | `claude-haiku-4-5`   |
+| OpenAI   | `OPENAI_API_KEY`    | `gpt-4o-mini`        |
+
+```bash
+# Pick one
+export GEMINI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export OPENAI_API_KEY=...
+
+# Force a specific provider when multiple keys are present
+export LLM_PROVIDER=claude   # gemini | claude | openai
+
+go run cmd/oracle/main.go report --output cloudoracle-report.pdf
+```
+
+Auto-detection order when `LLM_PROVIDER` is unset: **Gemini → Claude → OpenAI**. The first key found wins. LLM failures (missing key, network error, API error) are logged but never block PDF generation — the report falls back to the deterministic summary.
+
 ### Sample Output
 
 ![CloudOracle analyze output](example.png)
@@ -121,6 +172,10 @@ Summary per service
 | `DB_USER`    | `oracle`      | Database user         |
 | `DB_PASSWORD`| `oracle_dev`  | Database password     |
 | `DB_NAME`    | `cloudoracle` | Database name         |
+| `LLM_PROVIDER`     | _(auto)_ | Force a specific LLM provider: `gemini`, `claude`, or `openai`. If unset, auto-detects based on which API key is present. |
+| `GEMINI_API_KEY`   | _(unset)_ | API key for Google Gemini (`gemini-2.5-flash`)     |
+| `ANTHROPIC_API_KEY`| _(unset)_ | API key for Anthropic Claude (`claude-haiku-4-5`)  |
+| `OPENAI_API_KEY`   | _(unset)_ | API key for OpenAI (`gpt-4o-mini`)                 |
 
 ## How the Analyzer Works
 
@@ -137,6 +192,26 @@ Adding a new rule is a three-step process:
 2. Register it in the `rules` slice in `analyzer.go`
 3. That's it. No interfaces, no config files.
 
+## The LLM Provider Layer
+
+The AI summary feature is built around a single interface that every provider satisfies:
+
+```go
+type Provider interface {
+    GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error)
+    Name() string
+}
+```
+
+Three providers are shipped out of the box — Gemini, Claude, and OpenAI — each owning its own HTTP client, request/response types, and authentication headers. A shared `BuildPrompt` function in `internal/llm/prompt.go` computes totals, severity breakdowns, and per-service rollups, then wraps them in a consistent CTO/CFO-oriented prompt that every provider receives. This guarantees the narrative style stays identical no matter which model generated it.
+
+Provider selection is resolved at runtime by `NewProvider()`:
+1. If `LLM_PROVIDER` is set, that provider is used explicitly.
+2. Otherwise, the first available API key wins, in the order **Gemini → Claude → OpenAI**.
+3. If no key is found, `ErrNoProvider` is returned and the report command gracefully skips the AI section.
+
+Adding a fourth provider is a matter of creating one new file: implement the two methods on a struct, add a `newFooFromEnv()` constructor, and wire it into the switch in `provider.go`. The rest of the system — prompt, PDF rendering, CLI flags — stays untouched.
+
 ## Lessons Learned
 
 Building this project surfaced a subtle but important bug that would have gone unnoticed without testing against real(istic) data:
@@ -147,7 +222,8 @@ Building this project surfaced a subtle but important bug that would have gone u
 
 ## Roadmap
 
-- [ ] LLM-powered analysis: use Claude to generate natural-language optimization reports
+- [x] LLM-powered analysis: executive summaries generated by Gemini / Claude / OpenAI
+- [x] PDF report generation with executive summary and severity-coded tables
 - [ ] Real AWS integration via SDK (replace synthetic data with live resource inventory)
 - [ ] Multi-cloud support (GCP, Azure)
 - [ ] Cost trend tracking over time
