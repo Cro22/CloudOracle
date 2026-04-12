@@ -17,7 +17,6 @@ type Provider interface {
 
 func NewProvider() (Provider, error) {
 	explicit := os.Getenv("LLM_PROVIDER")
-
 	switch explicit {
 	case "gemini":
 		return newGeminiFromEnv()
