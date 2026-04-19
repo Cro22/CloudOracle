@@ -1,11 +1,11 @@
 package cloud
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"context"
 	"fmt"
-	"log"
-	"os"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	computepb "cloud.google.com/go/compute/apiv1/computepb"
 	functions "cloud.google.com/go/functions/apiv2"
 	functionspb "cloud.google.com/go/functions/apiv2/functionspb"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/iterator"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 )
@@ -23,10 +24,11 @@ type GCPProvider struct {
 	sqlService      *sqladmin.Service
 	functionsClient *functions.FunctionClient
 	projectID       string
+	serviceTimeout  time.Duration
 }
 
-func NewGCPProvider(ctx context.Context) (*GCPProvider, error) {
-	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
+func NewGCPProvider(ctx context.Context, cfg config.Config) (*GCPProvider, error) {
+	projectID := cfg.Cloud.GCPProject
 	if projectID == "" {
 		return nil, fmt.Errorf("GOOGLE_CLOUD_PROJECT environment variable is required for GCP provider")
 	}
@@ -57,6 +59,7 @@ func NewGCPProvider(ctx context.Context) (*GCPProvider, error) {
 		sqlService:      sqlService,
 		functionsClient: functionsClient,
 		projectID:       projectID,
+		serviceTimeout:  cfg.ServiceTimeout,
 	}, nil
 }
 
@@ -65,8 +68,6 @@ func (p *GCPProvider) Name() string {
 }
 
 func (p *GCPProvider) FetchResources(ctx context.Context) ([]shared.Resource, error) {
-	var allResources []shared.Resource
-
 	fetchers := []struct {
 		name  string
 		fetch func(context.Context) ([]shared.Resource, error)
@@ -77,16 +78,36 @@ func (p *GCPProvider) FetchResources(ctx context.Context) ([]shared.Resource, er
 		{"Cloud Functions", p.fetchCloudFunctions},
 	}
 
-	for _, f := range fetchers {
-		resources, err := f.fetch(ctx)
-		if err != nil {
-			log.Printf("WARNING: failed to fetch %s resources: %v", f.name, err)
-			continue
-		}
-		allResources = append(allResources, resources...)
+	results := make([][]shared.Resource, len(fetchers))
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for i, f := range fetchers {
+		i, f := i, f
+		g.Go(func() error {
+			fetchCtx, cancel := context.WithTimeout(gCtx, p.serviceTimeout)
+			defer cancel()
+
+			res, err := f.fetch(fetchCtx)
+			if err != nil {
+				slog.Warn("failed to fetch cloud resources",
+					"provider", "gcp",
+					"service", f.name,
+					"error", err,
+				)
+				return nil
+			}
+			results[i] = res
+			return nil
+		})
 	}
 
-	return allResources, nil
+	_ = g.Wait()
+
+	var all []shared.Resource
+	for _, r := range results {
+		all = append(all, r...)
+	}
+	return all, nil
 }
 
 func (p *GCPProvider) fetchComputeInstances(ctx context.Context) ([]shared.Resource, error) {
@@ -334,6 +355,9 @@ func parseGCPTimestamp(s string) time.Time {
 		return t
 	}
 
-	log.Printf("WARNING: could not parse GCP timestamp %q, using current time", s)
+	slog.Warn("could not parse GCP timestamp",
+		"provider", "gcp",
+		"timestamp", s,
+	)
 	return time.Now()
 }

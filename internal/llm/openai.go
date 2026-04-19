@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"bytes"
 	"context"
@@ -9,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"time"
 )
 
 type OpenAPIProvider struct {
@@ -19,16 +18,15 @@ type OpenAPIProvider struct {
 	client *http.Client
 }
 
-func newOpenAIFromEnv() (*OpenAPIProvider, error) {
-	key := os.Getenv("OPENAI_API_KEY")
-	if key == "" {
+func newOpenAI(cfg config.LLMConfig) (*OpenAPIProvider, error) {
+	if cfg.OpenAIAPIKey == "" {
 		return nil, errors.New("OPENAI_API_KEY environment variable is not set")
 	}
 
 	return &OpenAPIProvider{
-		apiKey: key,
+		apiKey: cfg.OpenAIAPIKey,
 		model:  "gpt-4o-mini",
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: cfg.RequestTimeout},
 	}, nil
 }
 

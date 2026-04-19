@@ -1,11 +1,11 @@
 package cloud
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"context"
 	"fmt"
-	"log"
-	"os"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/appservice/armappservice/v4"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v6"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/sql/armsql/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 type AzureProvider struct {
@@ -22,10 +23,12 @@ type AzureProvider struct {
 	sqlDBClient      *armsql.DatabasesClient
 	webAppsClient    *armappservice.WebAppsClient
 	subscriptionID   string
+	serviceTimeout   time.Duration
 }
 
-func NewAzureProvider(ctx context.Context) (*AzureProvider, error) {
-	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
+func NewAzureProvider(ctx context.Context, cfg config.Config) (*AzureProvider, error) {
+	_ = ctx
+	subscriptionID := cfg.Cloud.AzureSubID
 	if subscriptionID == "" {
 		return nil, fmt.Errorf("AZURE_SUBSCRIPTION_ID environment variable is required for Azure provider")
 	}
@@ -67,6 +70,7 @@ func NewAzureProvider(ctx context.Context) (*AzureProvider, error) {
 		sqlDBClient:      sqlDBClient,
 		webAppsClient:    webAppsClient,
 		subscriptionID:   subscriptionID,
+		serviceTimeout:   cfg.ServiceTimeout,
 	}, nil
 }
 
@@ -75,8 +79,6 @@ func (p *AzureProvider) Name() string {
 }
 
 func (p *AzureProvider) FetchResources(ctx context.Context) ([]shared.Resource, error) {
-	var allResources []shared.Resource
-
 	fetchers := []struct {
 		name  string
 		fetch func(context.Context) ([]shared.Resource, error)
@@ -87,16 +89,36 @@ func (p *AzureProvider) FetchResources(ctx context.Context) ([]shared.Resource, 
 		{"Functions", p.fetchFunctionApps},
 	}
 
-	for _, f := range fetchers {
-		resources, err := f.fetch(ctx)
-		if err != nil {
-			log.Printf("WARNING: failed to fetch %s resources: %v", f.name, err)
-			continue
-		}
-		allResources = append(allResources, resources...)
+	results := make([][]shared.Resource, len(fetchers))
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for i, f := range fetchers {
+		i, f := i, f
+		g.Go(func() error {
+			fetchCtx, cancel := context.WithTimeout(gCtx, p.serviceTimeout)
+			defer cancel()
+
+			res, err := f.fetch(fetchCtx)
+			if err != nil {
+				slog.Warn("failed to fetch cloud resources",
+					"provider", "azure",
+					"service", f.name,
+					"error", err,
+				)
+				return nil
+			}
+			results[i] = res
+			return nil
+		})
 	}
 
-	return allResources, nil
+	_ = g.Wait()
+
+	var all []shared.Resource
+	for _, r := range results {
+		all = append(all, r...)
+	}
+	return all, nil
 }
 
 func (p *AzureProvider) fetchVirtualMachines(ctx context.Context) ([]shared.Resource, error) {
@@ -155,7 +177,11 @@ func (p *AzureProvider) fetchSQLDatabases(ctx context.Context) ([]shared.Resourc
 			for dbPager.More() {
 				dbPage, err := dbPager.NextPage(ctx)
 				if err != nil {
-					log.Printf("WARNING: failed to list databases for server %s: %v", derefStr(server.Name), err)
+					slog.Warn("failed to list databases for server",
+						"provider", "azure",
+						"server", derefStr(server.Name),
+						"error", err,
+					)
 					break
 				}
 

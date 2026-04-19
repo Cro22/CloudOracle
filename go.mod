@@ -16,6 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/rds v1.118.1
 	github.com/aws/aws-sdk-go-v2/service/sts v1.42.0
 	github.com/jackc/pgx/v5 v5.9.1
+	golang.org/x/sync v0.20.0
 	google.golang.org/api v0.276.0
 )
 
@@ -66,7 +67,6 @@ require (
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect

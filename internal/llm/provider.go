@@ -1,10 +1,10 @@
 package llm
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"context"
 	"errors"
-	"os"
 )
 
 var ErrNoProvider = errors.New("no LLM provider configured")
@@ -14,27 +14,26 @@ type Provider interface {
 	Name() string
 }
 
-func NewProvider() (Provider, error) {
-	explicit := os.Getenv("LLM_PROVIDER")
-	switch explicit {
+func NewProvider(cfg config.LLMConfig) (Provider, error) {
+	switch cfg.Provider {
 	case "gemini":
-		return newGeminiFromEnv()
+		return newGemini(cfg)
 	case "claude":
-		return newClaudeFromEnv()
+		return newClaude(cfg)
 	case "openai":
-		return newOpenAIFromEnv()
+		return newOpenAI(cfg)
 	case "":
-		if os.Getenv("GEMINI_API_KEY") != "" {
-			return newGeminiFromEnv()
+		if cfg.GeminiAPIKey != "" {
+			return newGemini(cfg)
 		}
-		if os.Getenv("ANTHROPIC_API_KEY") != "" {
-			return newClaudeFromEnv()
+		if cfg.ClaudeAPIKey != "" {
+			return newClaude(cfg)
 		}
-		if os.Getenv("OPENAI_API_KEY") != "" {
-			return newOpenAIFromEnv()
+		if cfg.OpenAIAPIKey != "" {
+			return newOpenAI(cfg)
 		}
 		return nil, ErrNoProvider
 	default:
-		return nil, errors.New("unknown LLM_PROVIDER: " + explicit)
+		return nil, errors.New("unknown LLM_PROVIDER: " + cfg.Provider)
 	}
 }

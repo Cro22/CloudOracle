@@ -1,59 +1,65 @@
 package cloud
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/lambda"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 	rdstypes "github.com/aws/aws-sdk-go-v2/service/rds/types"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"golang.org/x/sync/errgroup"
 )
 
-const awsRegion = "us-east-2"
-const awsProfile = "cloudoracle"
-
 type AWSProvider struct {
-	ec2Client    *ec2.Client
-	rdsClient    *rds.Client
-	lambdaClient *lambda.Client
-	stsClient    *sts.Client
-	accountID    string
+	ec2Client      *ec2.Client
+	rdsClient      *rds.Client
+	lambdaClient   *lambda.Client
+	stsClient      *sts.Client
+	accountID      string
+	region         string
+	serviceTimeout time.Duration
 }
 
-func NewAWSProvider(ctx context.Context) (*AWSProvider, error) {
-	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithSharedConfigProfile(awsProfile),
-		config.WithRegion(awsRegion),
+func NewAWSProvider(ctx context.Context, cfg config.Config) (*AWSProvider, error) {
+	region := cfg.Cloud.AWSRegion
+	profile := cfg.Cloud.AWSProfile
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithSharedConfigProfile(profile),
+		awsconfig.WithRegion(region),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("loading AWS configuration (profile=%s, region=%s): %w",
-			awsProfile, awsRegion, err)
+			profile, region, err)
 	}
 
-	stsClient := sts.NewFromConfig(cfg)
-	ec2Client := ec2.NewFromConfig(cfg)
-	rdsClient := rds.NewFromConfig(cfg)
-	lambdaClient := lambda.NewFromConfig(cfg)
+	stsClient := sts.NewFromConfig(awsCfg)
+	ec2Client := ec2.NewFromConfig(awsCfg)
+	rdsClient := rds.NewFromConfig(awsCfg)
+	lambdaClient := lambda.NewFromConfig(awsCfg)
 
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return nil, fmt.Errorf("validating AWS credentials via STS (profile=%s): %w",
-			awsProfile, err)
+			profile, err)
 	}
 
 	return &AWSProvider{
-		ec2Client:    ec2Client,
-		rdsClient:    rdsClient,
-		lambdaClient: lambdaClient,
-		stsClient:    stsClient,
-		accountID:    *identity.Account,
+		ec2Client:      ec2Client,
+		rdsClient:      rdsClient,
+		lambdaClient:   lambdaClient,
+		stsClient:      stsClient,
+		accountID:      *identity.Account,
+		region:         region,
+		serviceTimeout: cfg.ServiceTimeout,
 	}, nil
 }
 
@@ -62,8 +68,6 @@ func (p *AWSProvider) Name() string {
 }
 
 func (p *AWSProvider) FetchResources(ctx context.Context) ([]shared.Resource, error) {
-	var allResources []shared.Resource
-
 	fetchers := []struct {
 		name  string
 		fetch func(context.Context) ([]shared.Resource, error)
@@ -74,16 +78,36 @@ func (p *AWSProvider) FetchResources(ctx context.Context) ([]shared.Resource, er
 		{"Lambda", p.fetchLambdaFunctions},
 	}
 
-	for _, f := range fetchers {
-		resources, err := f.fetch(ctx)
-		if err != nil {
-			log.Printf("WARNING: failed to fetch %s resources: %v", f.name, err)
-			continue
-		}
-		allResources = append(allResources, resources...)
+	results := make([][]shared.Resource, len(fetchers))
+	g, gCtx := errgroup.WithContext(ctx)
+
+	for i, f := range fetchers {
+		i, f := i, f
+		g.Go(func() error {
+			fetchCtx, cancel := context.WithTimeout(gCtx, p.serviceTimeout)
+			defer cancel()
+
+			res, err := f.fetch(fetchCtx)
+			if err != nil {
+				slog.Warn("failed to fetch cloud resources",
+					"provider", "aws",
+					"service", f.name,
+					"error", err,
+				)
+				return nil
+			}
+			results[i] = res
+			return nil
+		})
 	}
 
-	return allResources, nil
+	_ = g.Wait()
+
+	var all []shared.Resource
+	for _, r := range results {
+		all = append(all, r...)
+	}
+	return all, nil
 }
 
 func (p *AWSProvider) fetchEC2Instances(ctx context.Context) ([]shared.Resource, error) {
@@ -108,7 +132,7 @@ func (p *AWSProvider) fetchEC2Instances(ctx context.Context) ([]shared.Resource,
 
 		for _, reservation := range page.Reservations {
 			for _, instance := range reservation.Instances {
-				resources = append(resources, mapEC2ToResource(instance, p.accountID, awsRegion))
+				resources = append(resources, mapEC2ToResource(instance, p.accountID, p.region))
 			}
 		}
 	}
@@ -155,7 +179,7 @@ func (p *AWSProvider) fetchRDSInstances(ctx context.Context) ([]shared.Resource,
 				AccountID:    p.accountID,
 				Service:      "rds",
 				ResourceType: *db.DBInstanceClass,
-				Region:       awsRegion,
+				Region:       p.region,
 				MonthlyCost:  0.0,
 				UsageMetric:  0.0,
 				Tags:         tags,
@@ -177,7 +201,11 @@ func (p *AWSProvider) fetchRDSTags(ctx context.Context, arn *string) map[string]
 		ResourceName: arn,
 	})
 	if err != nil {
-		log.Printf("WARNING: failed to fetch RDS tags for %s: %v", *arn, err)
+		slog.Warn("failed to fetch RDS tags",
+			"provider", "aws",
+			"arn", *arn,
+			"error", err,
+		)
 		return nil
 	}
 
@@ -201,7 +229,7 @@ func (p *AWSProvider) fetchEBSVolumes(ctx context.Context) ([]shared.Resource, e
 				AccountID:    p.accountID,
 				Service:      "ebs",
 				ResourceType: string(vol.VolumeType),
-				Region:       awsRegion,
+				Region:       p.region,
 				MonthlyCost:  0.0,
 				UsageMetric:  0.0,
 				Tags:         convertEC2Tags(vol.Tags),
@@ -234,7 +262,7 @@ func (p *AWSProvider) fetchLambdaFunctions(ctx context.Context) ([]shared.Resour
 				AccountID:    p.accountID,
 				Service:      "lambda",
 				ResourceType: string(fn.Runtime),
-				Region:       awsRegion,
+				Region:       p.region,
 				MonthlyCost:  0.0,
 				UsageMetric:  0.0,
 				Tags:         tags,
@@ -256,7 +284,11 @@ func (p *AWSProvider) fetchLambdaTags(ctx context.Context, arn *string) map[stri
 		Resource: arn,
 	})
 	if err != nil {
-		log.Printf("WARNING: failed to fetch Lambda tags for %s: %v", *arn, err)
+		slog.Warn("failed to fetch Lambda tags",
+			"provider", "aws",
+			"arn", *arn,
+			"error", err,
+		)
 		return nil
 	}
 
@@ -281,7 +313,10 @@ func parseLambdaTimestamp(s *string) time.Time {
 		return t
 	}
 
-	log.Printf("WARNING: could not parse Lambda timestamp %q, using current time", *s)
+	slog.Warn("could not parse Lambda timestamp",
+		"provider", "aws",
+		"timestamp", *s,
+	)
 	return time.Now()
 }
 

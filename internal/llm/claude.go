@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"bytes"
 	"context"
@@ -9,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"time"
 )
 
 type ClaudeProvider struct {
@@ -19,15 +18,14 @@ type ClaudeProvider struct {
 	client *http.Client
 }
 
-func newClaudeFromEnv() (*ClaudeProvider, error) {
-	key := os.Getenv("ANTHROPIC_API_KEY")
-	if key == "" {
+func newClaude(cfg config.LLMConfig) (*ClaudeProvider, error) {
+	if cfg.ClaudeAPIKey == "" {
 		return nil, errors.New("ANTHROPIC_API_KEY environment variable is not set")
 	}
 	return &ClaudeProvider{
-		apiKey: key,
+		apiKey: cfg.ClaudeAPIKey,
 		model:  "claude-haiku-4-5",
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: cfg.RequestTimeout},
 	}, nil
 }
 

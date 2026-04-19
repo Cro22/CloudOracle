@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,7 +48,7 @@ func CreateSnapshot(ctx context.Context, pool *pgxpool.Pool, resources []shared.
 	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			log.Printf("failed to rollback snapshot transaction: %v", err)
+			slog.Warn("failed to rollback snapshot transaction", "error", err)
 		}
 	}()
 
