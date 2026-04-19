@@ -1,10 +1,8 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useApi } from '../hooks/useApi'
 import { useRefresh } from '../context/RefreshContext'
 import { formatCurrency } from '../lib/theme'
 import { EmptyState, ErrorState, SkeletonBlock } from './UIStates'
-
-const severityRank = { High: 3, Medium: 2, Low: 1 }
 
 const severityStyles = {
   High: 'bg-red-100 text-red-700 ring-1 ring-red-200 dark:bg-red-500/20 dark:text-red-400 dark:ring-red-500/30',
@@ -12,7 +10,9 @@ const severityStyles = {
   Low: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-400 dark:ring-emerald-500/30',
 }
 
-function SortHeader({ label, column, sort, setSort, className = '' }) {
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+
+function SortHeader({ label, column, sort, onSortChange, className = '' }) {
   const active = sort.column === column
   const direction = active ? sort.direction : null
 
@@ -21,7 +21,7 @@ function SortHeader({ label, column, sort, setSort, className = '' }) {
       scope="col"
       className={`cursor-pointer select-none px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 transition-colors hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100 ${className}`}
       onClick={() =>
-        setSort({
+        onSortChange({
           column,
           direction: active && direction === 'desc' ? 'asc' : 'desc',
         })
@@ -47,7 +47,7 @@ function SortHeader({ label, column, sort, setSort, className = '' }) {
   )
 }
 
-function Shell({ children, savings }) {
+function Shell({ children, savings, footer }) {
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
       <div className="flex items-start justify-between gap-6 border-b border-slate-200 px-6 py-5 dark:border-slate-800">
@@ -67,14 +67,15 @@ function Shell({ children, savings }) {
         </div>
       </div>
       {children}
+      {footer}
     </div>
   )
 }
 
-function SkeletonRows() {
+function SkeletonRows({ rows = 6 }) {
   return (
     <div className="divide-y divide-slate-100 px-6 py-4 dark:divide-slate-800">
-      {Array.from({ length: 6 }).map((_, i) => (
+      {Array.from({ length: rows }).map((_, i) => (
         <div key={i} className="flex items-center gap-4 py-3">
           <SkeletonBlock className="h-5 w-16 rounded-full" />
           <SkeletonBlock className="h-4 w-12" />
@@ -86,37 +87,111 @@ function SkeletonRows() {
   )
 }
 
+function PaginationBar({ page, pageSize, total, totalPages, onPage, onPageSize, busy }) {
+  const startIdx = total === 0 ? 0 : (page - 1) * pageSize + 1
+  const endIdx = Math.min(page * pageSize, total)
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-slate-200 px-6 py-4 text-sm dark:border-slate-800 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center gap-4 text-slate-600 dark:text-slate-400">
+        <span>
+          Showing{' '}
+          <span className="font-semibold text-slate-900 tabular-nums dark:text-slate-100">
+            {startIdx}–{endIdx}
+          </span>{' '}
+          of{' '}
+          <span className="font-semibold text-slate-900 tabular-nums dark:text-slate-100">{total}</span>
+        </span>
+
+        <label className="inline-flex items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">Rows</span>
+          <select
+            value={pageSize}
+            onChange={(e) => onPageSize(Number(e.target.value))}
+            className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 shadow-sm focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="flex items-center gap-2">
+        {busy && (
+          <svg
+            className="h-4 w-4 animate-spin text-slate-400"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-label="Loading"
+          >
+            <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+          </svg>
+        )}
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPage(1)}
+          className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          aria-label="First page"
+        >
+          «
+        </button>
+        <button
+          type="button"
+          disabled={page <= 1}
+          onClick={() => onPage(page - 1)}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        >
+          Prev
+        </button>
+        <span className="min-w-[6ch] text-center text-xs font-medium text-slate-700 tabular-nums dark:text-slate-200">
+          {page} / {totalPages}
+        </span>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPage(page + 1)}
+          className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:hover:bg-slate-800"
+        >
+          Next
+        </button>
+        <button
+          type="button"
+          disabled={page >= totalPages}
+          onClick={() => onPage(totalPages)}
+          className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+          aria-label="Last page"
+        >
+          »
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function FindingsTable() {
-  const { data, loading, error } = useApi('/api/findings')
-  const { refresh } = useRefresh()
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [sort, setSort] = useState({ column: 'savings', direction: 'desc' })
 
-  const findings = data?.findings ?? []
+  const endpoint = `/api/findings?page=${page}&page_size=${pageSize}&sort=${sort.column}&order=${sort.direction}`
+  const { data, loading, error } = useApi(endpoint)
+  const { refresh } = useRefresh()
 
-  const sorted = useMemo(() => {
-    const rows = [...findings]
-    rows.sort((a, b) => {
-      let cmp = 0
-      switch (sort.column) {
-        case 'severity':
-          cmp = (severityRank[a.Severity] ?? 0) - (severityRank[b.Severity] ?? 0)
-          break
-        case 'savings':
-          cmp = (a.MonthlySavings ?? 0) - (b.MonthlySavings ?? 0)
-          break
-        case 'cost':
-          cmp = (a.MonthlyCost ?? 0) - (b.MonthlyCost ?? 0)
-          break
-        case 'service':
-          cmp = (a.Service ?? '').localeCompare(b.Service ?? '')
-          break
-        default:
-          cmp = 0
-      }
-      return sort.direction === 'asc' ? cmp : -cmp
-    })
-    return rows
-  }, [findings, sort])
+  const handleSortChange = (next) => {
+    setSort(next)
+    setPage(1)
+  }
+
+  const handlePageSizeChange = (next) => {
+    setPageSize(next)
+    setPage(1)
+  }
 
   if (error) {
     return (
@@ -128,7 +203,7 @@ export default function FindingsTable() {
     )
   }
 
-  if (loading || !data) {
+  if (!data) {
     return (
       <Shell savings="—">
         <SkeletonRows />
@@ -136,9 +211,25 @@ export default function FindingsTable() {
     )
   }
 
-  if (findings.length === 0) {
+  const findings = data.findings ?? []
+  const totalPages = data.total_pages ?? 1
+  const total = data.total_count ?? 0
+
+  const footer = (
+    <PaginationBar
+      page={data.page ?? page}
+      pageSize={data.page_size ?? pageSize}
+      total={total}
+      totalPages={totalPages}
+      onPage={setPage}
+      onPageSize={handlePageSizeChange}
+      busy={loading}
+    />
+  )
+
+  if (total === 0) {
     return (
-      <Shell savings={formatCurrency(0)}>
+      <Shell savings={formatCurrency(0)} footer={footer}>
         <div className="px-6 py-6">
           <EmptyState
             title="No findings"
@@ -150,13 +241,16 @@ export default function FindingsTable() {
   }
 
   return (
-    <Shell savings={formatCurrency(data.total_potential_savings)}>
-      <div className="overflow-x-auto">
+    <Shell savings={formatCurrency(data.total_potential_savings)} footer={footer}>
+      <div
+        className={`overflow-x-auto transition-opacity ${loading ? 'opacity-60' : 'opacity-100'}`}
+        aria-busy={loading}
+      >
         <table className="min-w-full divide-y divide-slate-200 dark:divide-slate-800">
           <thead className="bg-slate-50 dark:bg-slate-900/60">
             <tr>
-              <SortHeader label="Severity" column="severity" sort={sort} setSort={setSort} />
-              <SortHeader label="Service" column="service" sort={sort} setSort={setSort} />
+              <SortHeader label="Severity" column="severity" sort={sort} onSortChange={handleSortChange} />
+              <SortHeader label="Service" column="service" sort={sort} onSortChange={handleSortChange} />
               <th scope="col" className="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 md:table-cell">
                 Resource
               </th>
@@ -167,14 +261,14 @@ export default function FindingsTable() {
                 label="Cost / mo"
                 column="cost"
                 sort={sort}
-                setSort={setSort}
+                onSortChange={handleSortChange}
                 className="hidden text-right sm:table-cell"
               />
               <SortHeader
                 label="Savings / mo"
                 column="savings"
                 sort={sort}
-                setSort={setSort}
+                onSortChange={handleSortChange}
                 className="text-right"
               />
               <th scope="col" className="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 xl:table-cell">
@@ -183,7 +277,7 @@ export default function FindingsTable() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-            {sorted.map((f, i) => (
+            {findings.map((f, i) => (
               <tr
                 key={`${f.ResourceID}-${f.Rule}-${i}`}
                 className="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40"

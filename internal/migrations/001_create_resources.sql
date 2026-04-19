@@ -11,5 +11,5 @@ CREATE TABLE IF NOT EXISTS resources
 	updated_at    TIMESTAMPTZ    NOT NULL
 );
 
-CREATE INDEX idx_resources_service ON resources (service);
-CREATE INDEX idx_resources_account ON resources (account_id);
+CREATE INDEX IF NOT EXISTS idx_resources_service ON resources (service);
+CREATE INDEX IF NOT EXISTS idx_resources_account ON resources (account_id);
