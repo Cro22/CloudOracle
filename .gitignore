@@ -24,6 +24,17 @@ go.work.sum
 
 # env file
 .env
+.env.local
+*.pem
 
 #IDE
 .idea
+
+# Frontend
+web/node_modules/
+web/dist/
+
+# Frontend bundle embedded by Go at compile time. Keep the directory so
+# go:embed has a valid target, but ignore the generated assets.
+/internal/api/dist/*
+!/internal/api/dist/.gitkeep
