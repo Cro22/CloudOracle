@@ -10,6 +10,8 @@ A CLI tool built in Go that analyzes cloud infrastructure resources and detects 
 
 Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud infrastructure because nobody is watching the bill. CloudOracle demonstrates how to build a system that catches these issues automatically, using the same patterns that tools like AWS Trusted Advisor or Datadog Cloud Cost Management use internally.
 
+Unlike policy engines like **Cloud Custodian** that focus on automated enforcement, CloudOracle is an *analysis-first* tool built for FinOps visibility — combining deterministic rules with LLM-generated insights to produce executive-ready reports and dashboards.
+
 ## Features
 
 - **Multi-cloud support** - Switch between AWS, GCP, Azure, and synthetic data via a single env var (`CLOUDORACLE_PROVIDER`)
@@ -515,6 +517,14 @@ go test ./internal/... -v
 All rules are pure functions (`Resource -> *Finding`), which makes them trivially testable without mocks, fixtures, or test databases. The code was designed to be testable from the start — not tested after the fact.
 
 ## Architecture Decisions
+
+### Why not Cloud Custodian?
+Cloud Custodian (Python, ~6k stars) is a mature policy engine: you write YAML rules like *"if an EC2 has no `Owner` tag, stop it"* and it **enforces** them across AWS/GCP/Azure. CloudOracle targets a different stage of the FinOps loop:
+
+- **Custodian**: governance and remediation — takes actions (stop, delete, tag, notify). Designed for platform teams running hundreds of policies in CI.
+- **CloudOracle**: analysis and reporting — read-only, LLM-assisted narrative, PDF + dashboard. Designed for the conversation between engineering and finance, not for automated enforcement.
+
+The tools are complementary: Custodian is *what to enforce*, CloudOracle is *why it matters this month*. Read-only is intentional — it's safer to adopt in a new org and removes the "did this tool just delete my database?" objection at procurement time.
 
 ### Why interfaces over inheritance for LLM providers
 The `Provider` interface in `internal/llm` is intentionally minimal — just `GenerateSummary` and `Name`. Each provider (Gemini, Claude, OpenAI) is a fully independent implementation. Adding a fourth provider requires zero changes to existing code: write a new file, register it in `provider.go`, done. This is Go's structural typing at its best — no inheritance, no abstract base classes, no framework lock-in.
