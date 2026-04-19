@@ -15,12 +15,18 @@ func NewProvider(ctx context.Context) (CloudProvider, error) {
 	case "aws":
 		return NewAWSProvider(ctx)
 
+	case "gcp":
+		return NewGCPProvider(ctx)
+
+	case "azure":
+		return NewAzureProvider(ctx)
+
 	case "synthetic", "":
 		return NewSyntheticProvider(100, "synthetic-account"), nil
 
 	default:
 		return nil, fmt.Errorf(
-			"unknown provider %q (set %s to \"aws\" or \"synthetic\")",
+			"unknown provider %q (set %s to \"aws\", \"gcp\", \"azure\", or \"synthetic\")",
 			name, ProviderEnvVar,
 		)
 	}

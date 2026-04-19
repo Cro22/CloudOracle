@@ -12,8 +12,10 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
 
 ## Features
 
-- **Dual provider system** - Switch between synthetic data and real AWS inventory via a single env var (`CLOUDORACLE_PROVIDER`)
+- **Multi-cloud support** - Switch between AWS, GCP, Azure, and synthetic data via a single env var (`CLOUDORACLE_PROVIDER`)
 - **Real AWS integration** - Fetches live EC2 instances, RDS databases, EBS volumes, and Lambda functions using AWS SDK v2 with STS credential validation
+- **Real GCP integration** - Fetches Compute Engine VMs, Cloud SQL instances, Persistent Disks, and Cloud Functions using Google Cloud Go client libraries
+- **Real Azure integration** - Fetches Virtual Machines, Azure SQL databases, Managed Disks, and Function Apps using Azure SDK for Go
 - **Synthetic data generation** - Realistic resource simulation across EC2, RDS, EBS, and Lambda with configurable account IDs and resource counts
 - **PostgreSQL persistence** - Transactional bulk inserts with upsert support (`ON CONFLICT DO UPDATE`)
 - **Rule-based analysis engine** - Pluggable rules architecture where each rule is a pure function `Resource -> Finding`
@@ -40,6 +42,8 @@ internal/
     factory.go              # Provider factory: env var -> concrete provider
     synthetic_provider.go   # Synthetic data provider (dev/demo)
     aws_provider.go         # Real AWS provider (EC2, RDS, EBS, Lambda via SDK v2)
+    gcp_provider.go         # Real GCP provider (Compute, Cloud SQL, Persistent Disks, Functions)
+    azure_provider.go       # Real Azure provider (VMs, SQL, Managed Disks, Function Apps)
   generator/
     generator.go            # Synthetic data generation for EC2, RDS, EBS, Lambda
   analyzer/
@@ -61,19 +65,22 @@ migrations/
 docker-compose.yml          # PostgreSQL 16 setup
 ```
 
-The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the interface, `SyntheticProvider` and `AWSProvider` are the concrete strategies, and `factory.go` selects the strategy at runtime based on `CLOUDORACLE_PROVIDER`. This lets `main.go` work with any provider without knowing which one is active.
+The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the interface, and `SyntheticProvider`, `AWSProvider`, `GCPProvider`, and `AzureProvider` are the concrete strategies. `factory.go` selects the strategy at runtime based on `CLOUDORACLE_PROVIDER`. This lets `main.go` work with any provider without knowing which one is active.
 
 ## Tech Stack
 
-| Component    | Technology                |
-|-------------|---------------------------|
-| Language    | Go 1.25                   |
-| Database    | PostgreSQL 16 (Alpine)    |
-| DB Driver   | pgx v5 (connection pool)  |
-| PDF         | go-pdf/fpdf               |
-| LLM         | Gemini / Claude / OpenAI  |
-| Testing     | `testing` + `httptest`    |
-| Containers  | Docker Compose            |
+| Component    | Technology                         |
+|-------------|-------------------------------------|
+| Language    | Go 1.25                             |
+| Database    | PostgreSQL 16 (Alpine)              |
+| DB Driver   | pgx v5 (connection pool)            |
+| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS) |
+| GCP SDK     | Google Cloud Go (Compute, SQL, Functions) |
+| Azure SDK   | Azure SDK for Go (Compute, SQL, App Service) |
+| PDF         | go-pdf/fpdf                         |
+| LLM         | Gemini / Claude / OpenAI            |
+| Testing     | `testing` + `httptest`              |
+| Containers  | Docker Compose                      |
 
 ## Getting Started
 
@@ -201,11 +208,50 @@ sts:GetCallerIdentity
 
 The provider validates credentials at startup via `sts:GetCallerIdentity` — if the profile is misconfigured or credentials are expired, the error appears immediately instead of failing mid-scan.
 
+## GCP Setup
+
+To use the GCP provider (`CLOUDORACLE_PROVIDER=gcp`), you need:
+
+1. A GCP project with the following APIs enabled: Compute Engine, Cloud SQL Admin, Cloud Functions
+2. Application Default Credentials configured via one of:
+   - `gcloud auth application-default login` (development)
+   - `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a service account JSON (production)
+3. `GOOGLE_CLOUD_PROJECT` env var set to your project ID
+
+Required IAM roles (least privilege):
+```
+compute.instances.list, compute.disks.list
+cloudsql.instances.list
+cloudfunctions.functions.list
+```
+
+## Azure Setup
+
+To use the Azure provider (`CLOUDORACLE_PROVIDER=azure`), you need:
+
+1. `AZURE_SUBSCRIPTION_ID` env var set to your subscription ID
+2. Credentials configured via one of:
+   - Azure CLI: `az login` (development)
+   - Environment variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` (production)
+   - Managed Identity (when running in Azure)
+
+The provider uses `DefaultAzureCredential` which tries all methods automatically.
+
+Required RBAC role: `Reader` on the subscription. Production would scope to:
+```
+Microsoft.Compute/virtualMachines/read
+Microsoft.Compute/disks/read
+Microsoft.Sql/servers/read, Microsoft.Sql/servers/databases/read
+Microsoft.Web/sites/read
+```
+
 ## Environment Variables
 
 | Variable      | Default       | Description           |
 |--------------|---------------|-----------------------|
-| `CLOUDORACLE_PROVIDER` | `synthetic` | Cloud provider to use: `aws` (real account) or `synthetic` (generated data) |
+| `CLOUDORACLE_PROVIDER` | `synthetic` | Cloud provider: `aws`, `gcp`, `azure`, or `synthetic` |
+| `GOOGLE_CLOUD_PROJECT` | _(unset)_ | GCP project ID (required when provider is `gcp`) |
+| `AZURE_SUBSCRIPTION_ID` | _(unset)_ | Azure subscription ID (required when provider is `azure`) |
 | `DB_HOST`    | `localhost`   | PostgreSQL host       |
 | `DB_PORT`    | `5432`        | PostgreSQL port       |
 | `DB_USER`    | `oracle`      | Database user         |
@@ -303,7 +349,7 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [x] PDF report generation with executive summary and severity-coded tables
 - [x] Test suite: 91 unit tests across analyzer, generator, LLM providers, PDF, and config
 - [x] Real AWS integration via SDK (EC2, RDS, EBS, Lambda with STS validation and graceful degradation)
-- [ ] Multi-cloud support (GCP, Azure)
+- [x] Multi-cloud support (GCP, Azure) with Compute, SQL, Disks, and Functions for each provider
 - [ ] Cost trend tracking over time
 - [ ] Export findings to JSON/CSV
 - [ ] Web dashboard with cost visualizations
