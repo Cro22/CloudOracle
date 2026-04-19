@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sort"
+	"strings"
 )
 
 func main() {
@@ -37,6 +39,8 @@ func main() {
 		runAnalyze(ctx, pool)
 	case "report":
 		runReport(ctx, pool, os.Args[2:])
+	case "trend":
+		runTrend(ctx, pool, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -45,12 +49,14 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("CloudOracle - FindOps for AWS - GCP - Azure")
+	fmt.Println("CloudOracle - FinOps for AWS - GCP - Azure")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  oracle seed <account_id> <num_resources>  - Generate and insert random resources for an account")
+	fmt.Println("  oracle seed [--count N] [--account ID]   - Fetch resources and insert into database")
 	fmt.Println("  oracle list                              - List all resources ordered by monthly cost")
-	fmt.Println("  oracle report --output report.pdf")
+	fmt.Println("  oracle analyze                           - Run cost optimization rules")
+	fmt.Println("  oracle report [--output file.pdf]        - Generate PDF report")
+	fmt.Println("  oracle trend [--days N]                  - Show cost trends over time")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, args []string) {
@@ -82,6 +88,12 @@ func runSeed(ctx context.Context, pool *db.Pool, args []string) {
 		log.Fatalf("Failed to insert resources: %v", err)
 	}
 	log.Printf("Inserted %d resources from %s provider", len(resources), provider.Name())
+
+	if err := db.CreateSnapshot(ctx, pool, resources); err != nil {
+		log.Printf("⚠ Failed to create cost snapshot: %v (continuing)", err)
+	} else {
+		log.Println("✓ Cost snapshot recorded")
+	}
 }
 
 func runList(ctx context.Context, pool *db.Pool) {
@@ -212,4 +224,101 @@ func runReport(ctx context.Context, pool *db.Pool, args []string) {
 	}
 
 	fmt.Printf("✓ Report generated: %s\n", *output)
+}
+
+func runTrend(ctx context.Context, pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("trend", flag.ExitOnError)
+	days := fs.Int("days", 90, "Number of days to look back")
+	fs.Parse(args)
+
+	snapshots, err := db.ListSnapshots(ctx, pool, *days)
+	if err != nil {
+		log.Fatalf("Failed to list snapshots: %v", err)
+	}
+
+	if len(snapshots) == 0 {
+		fmt.Println("No snapshots found. Run 'oracle seed' to create cost snapshots.")
+		return
+	}
+
+	type trend struct {
+		OldestCost float64
+		LatestCost float64
+		OldestDate string
+		LatestDate string
+	}
+
+	trends := make(map[string]*trend)
+
+	for _, s := range snapshots {
+		date := s.TakenAt.Format("2006-01-02")
+		t, exists := trends[s.Service]
+		if !exists {
+			t = &trend{
+				OldestCost: s.TotalMonthlyCost,
+				LatestCost: s.TotalMonthlyCost,
+				OldestDate: date,
+				LatestDate: date,
+			}
+			trends[s.Service] = t
+			continue
+		}
+		if date < t.OldestDate {
+			t.OldestCost = s.TotalMonthlyCost
+			t.OldestDate = date
+		}
+		if date > t.LatestDate {
+			t.LatestCost = s.TotalMonthlyCost
+			t.LatestDate = date
+		}
+	}
+
+	services := make([]string, 0, len(trends))
+	for svc := range trends {
+		services = append(services, svc)
+	}
+	sort.Strings(services)
+
+	snapshotCount := countUniqueSnapshots(snapshots)
+	fmt.Printf("Cost Trends (last %d days, %d snapshots)\n\n", *days, snapshotCount)
+	fmt.Printf("%-12s %12s %12s %14s\n", "Service", "Oldest", "Latest", "Change")
+	fmt.Println(strings.Repeat("─", 56))
+
+	var totalOldest, totalLatest float64
+	for _, svc := range services {
+		t := trends[svc]
+		printTrendLine(svc, t.OldestCost, t.LatestCost)
+		totalOldest += t.OldestCost
+		totalLatest += t.LatestCost
+	}
+
+	fmt.Println(strings.Repeat("─", 56))
+	printTrendLine("Total", totalOldest, totalLatest)
+}
+
+func printTrendLine(label string, oldest, latest float64) {
+	change := latest - oldest
+	arrow := "→"
+	if change > 0.005 {
+		arrow = "↑"
+	}
+	if change < -0.005 {
+		arrow = "↓"
+	}
+
+	pct := 0.0
+	if oldest > 0 {
+		pct = (change / oldest) * 100
+	}
+
+	fmt.Printf("%-12s $%10.2f $%10.2f  %+7.2f (%+.1f%%) %s\n",
+		label, oldest, latest, change, pct, arrow)
+}
+
+func countUniqueSnapshots(snapshots []db.Snapshot) int {
+	seen := make(map[string]bool)
+	for _, s := range snapshots {
+		seen[s.TakenAt.Format("2006-01-02 15:04")] = true
+	}
+	return len(seen)
 }

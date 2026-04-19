@@ -28,6 +28,7 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
 - **Service summary** - Aggregated view of findings and potential savings per AWS service
 - **PDF report generation** - Professional executive-style PDF reports with severity-coded tables, recommended actions, and annual savings projections
 - **LLM-powered executive summaries** - Pluggable provider layer (Gemini, Claude, OpenAI) that turns raw findings into a CTO/CFO-ready narrative embedded directly into the PDF report
+- **Cost trend tracking** - Automatic cost snapshots on every seed, with a `trend` command that shows per-service cost changes over time with directional arrows and percentage deltas
 
 ## Architecture
 
@@ -60,8 +61,10 @@ internal/
   db/
     db.go                   # PostgreSQL connection pool (pgx)
     insert.go               # Transactional insert + query logic
+    snapshots.go            # Cost snapshot creation + trend queries
 migrations/
   001_create_resources.sql  # Schema with indexes on service and account_id
+  002_create_cost_snapshots.sql  # Cost snapshots for trend tracking
 docker-compose.yml          # PostgreSQL 16 setup
 ```
 
@@ -96,10 +99,11 @@ The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the i
 docker compose up -d
 ```
 
-### 2. Run the migration
+### 2. Run the migrations
 
 ```bash
 docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/001_create_resources.sql
+docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/002_create_cost_snapshots.sql
 ```
 
 ### 3. Seed sample data
@@ -135,7 +139,28 @@ This generates a professional PDF with:
 
 ![CloudOracle PDF report example](examplepdf.png)
 
-### 7. (Optional) Enable the LLM-powered executive summary
+### 7. View cost trends
+
+Each `seed` automatically creates a cost snapshot. After running `seed` multiple times (on different days or with different data), view how costs change:
+
+```bash
+go run cmd/oracle/main.go trend --days 30
+```
+
+```
+Cost Trends (last 30 days, 3 snapshots)
+
+Service      Oldest       Latest         Change
+────────────────────────────────────────────────────────
+ebs          $   100.00 $    90.00    -10.00 (-10.0%) ↓
+ec2          $   460.00 $   510.00    +50.00 (+10.9%) ↑
+lambda       $     2.50 $     3.10     +0.60 (+24.0%) ↑
+rds          $   180.00 $   195.00    +15.00 (+8.3%)  ↑
+────────────────────────────────────────────────────────
+Total        $   742.50 $   798.10    +55.60 (+7.5%)  ↑
+```
+
+### 8. (Optional) Enable the LLM-powered executive summary
 
 The `report` command will automatically call an LLM provider if any supported API key is present in the environment. No flags required — just export a key and run `report` again. If no key is configured, the PDF is still generated without the narrative section.
 
@@ -350,7 +375,7 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [x] Test suite: 91 unit tests across analyzer, generator, LLM providers, PDF, and config
 - [x] Real AWS integration via SDK (EC2, RDS, EBS, Lambda with STS validation and graceful degradation)
 - [x] Multi-cloud support (GCP, Azure) with Compute, SQL, Disks, and Functions for each provider
-- [ ] Cost trend tracking over time
+- [x] Cost trend tracking over time (automatic snapshots on seed + `trend` command)
 - [ ] Export findings to JSON/CSV
 - [ ] Web dashboard with cost visualizations
 
