@@ -2,7 +2,7 @@
 
 ![Tests](https://img.shields.io/badge/tests-103%20passing-brightgreen)
 ![Go Version](https://img.shields.io/badge/go-1.25-blue)
-![License](https://img.shields.io/badge/license-MIT-green)
+![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
 A CLI tool built in Go that analyzes cloud infrastructure resources and detects cost optimization opportunities. It simulates a real-world FinOps workflow: ingesting cloud resource data, storing it in PostgreSQL, and running deterministic rules to surface waste such as idle EC2 instances, orphaned EBS volumes, oversized RDS databases, and over-provisioned Lambda functions.
 
