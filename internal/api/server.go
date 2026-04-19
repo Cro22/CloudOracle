@@ -22,6 +22,10 @@ func NewServer(pool *db.Pool) *Server {
 	mux.HandleFunc("GET /api/findings", s.handleFindings)
 	mux.HandleFunc("GET /api/trends", s.handleTrends)
 	mux.HandleFunc("GET /api/summary", s.handleSummary)
+	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, http.StatusNotFound, "endpoint not found: "+r.Method+" "+r.URL.Path)
+	})
+	mux.Handle("GET /", staticHandler())
 
 	s.handler = corsMiddleware(loggingMiddleware(mux))
 	return s

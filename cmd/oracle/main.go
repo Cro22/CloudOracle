@@ -418,6 +418,7 @@ func runServe(pool *db.Pool, args []string) {
 	}
 
 	server := api.NewServer(pool)
+	slog.Info("Dashboard available", "url", fmt.Sprintf("http://localhost:%s", *port))
 	if err := server.Start(":" + *port); err != nil {
 		slog.Error("API server failed", "error", err)
 		os.Exit(1)

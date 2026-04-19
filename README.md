@@ -34,6 +34,7 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
 - **Structured logging (`log/slog`)** - Every log line carries typed attributes (`provider`, `service`, `error`, ...), with pluggable text or JSON output for ingestion into log aggregators
 - **Centralized configuration** - A single `config.Load()` reads every env var up front and is injected into the cloud, LLM, and DB layers — no component reaches for `os.Getenv` on its own
 - **Export findings to JSON or CSV** - Pipe analyzer output into downstream tooling (dashboards, spreadsheets, ticket systems) via `oracle export --format=json|csv`, writing to stdout or a file
+- **Single-binary web dashboard** - React + Recharts UI embedded into the Go binary via `go:embed`; `oracle serve` boots API and dashboard on one port with no external assets required
 
 ## Architecture
 
@@ -193,7 +194,42 @@ go run cmd/oracle/main.go export --format=json | jq '.[] | select(.Severity == "
 
 The JSON output is an array of `Finding` objects. The CSV output has a fixed header: `resource_id, service, resource_type, region, rule, severity, monthly_cost, monthly_savings, description, recommendation`. Numeric fields are formatted with two decimals. Commas, quotes, and newlines in descriptions are escaped per RFC 4180 — the output is safe to open in Excel or parse with any standard CSV library.
 
-### 9. (Optional) Enable the LLM-powered executive summary
+### 9. Web dashboard
+
+CloudOracle ships a React + Recharts dashboard that reads the same database as the CLI. There are two workflows:
+
+**Production / demo — one binary, one command.** The Go binary embeds the compiled frontend via `go:embed`, so after a single `npm run build` the whole stack (API + UI) is served on one port.
+
+```bash
+# Build the React bundle into internal/api/dist (go:embed target)
+cd web
+npm install   # first time only
+npm run build
+cd ..
+
+# Build the self-contained binary and run it
+go build -o cloudoracle ./cmd/oracle
+./cloudoracle serve --port 8080
+# → open http://localhost:8080
+```
+
+The binary is fully self-contained. Copy the single file (`cloudoracle` / `cloudoracle.exe`) to any machine, point it at a reachable Postgres via `DB_*` env vars, and the dashboard loads. No `web/` directory needed at runtime.
+
+**Development — hot reload.** During iteration, run the API and the Vite dev server separately so you get HMR on React changes without rebuilding Go:
+
+```bash
+# Terminal 1 — API on :8080
+go run ./cmd/oracle serve --port 8080
+
+# Terminal 2 — Vite on :5173 with /api/* proxied to :8080
+cd web
+npm run dev
+# → open http://localhost:5173
+```
+
+> **Note:** `go:embed` requires `internal/api/dist/` to exist at compile time. The repo commits a `.gitkeep` so `go build` always works — if you haven't run `npm run build`, visiting the root route shows a "Dashboard bundle not found" page with instructions. The JSON API at `/api/*` works either way.
+
+### 10. (Optional) Enable the LLM-powered executive summary
 
 The `report` command will automatically call an LLM provider if any supported API key is present in the environment. No flags required — just export a key and run `report` again. If no key is configured, the PDF is still generated without the narrative section.
 
@@ -436,8 +472,8 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [x] Structured logging with `log/slog` (text or JSON output, level-configurable)
 - [x] Centralized configuration loaded once and injected as typed structs
 - [x] Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
+- [x] Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
 - [ ] SDK-client interfaces for real-provider unit tests (mockable AWS/GCP/Azure clients)
-- [ ] Web dashboard with cost visualizations
 
 ## License
 
