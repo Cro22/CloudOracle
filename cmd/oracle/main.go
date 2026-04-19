@@ -2,6 +2,7 @@ package main
 
 import (
 	"CloudOracle/internal/analyzer"
+	"CloudOracle/internal/api"
 	"CloudOracle/internal/cloud"
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
@@ -54,6 +55,8 @@ func main() {
 		runTrend(ctx, pool, os.Args[2:])
 	case "export":
 		runExport(ctx, pool, os.Args[2:])
+	case "serve":
+		runServe(pool, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -71,6 +74,7 @@ func printUsage() {
 	fmt.Println("  oracle report [--output file.pdf]        - Generate PDF report")
 	fmt.Println("  oracle trend [--days N]                  - Show cost trends over time")
 	fmt.Println("  oracle export --format=json|csv [--output file] - Export findings to JSON or CSV (stdout by default)")
+	fmt.Println("  oracle serve [--port 8080]               - Start the HTTP API for the dashboard")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
@@ -402,5 +406,20 @@ func runExport(ctx context.Context, pool *db.Pool, args []string) {
 			"format", *format,
 			"path", *output,
 		)
+	}
+}
+
+func runServe(pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := fs.String("port", "8080", "Port to listen on")
+	if err := fs.Parse(args); err != nil {
+		slog.Error("failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+
+	server := api.NewServer(pool)
+	if err := server.Start(":" + *port); err != nil {
+		slog.Error("API server failed", "error", err)
+		os.Exit(1)
 	}
 }
