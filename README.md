@@ -73,10 +73,13 @@ internal/
     db.go                   # PostgreSQL connection pool (pgx)
     insert.go               # Transactional insert + query logic
     snapshots.go            # Cost snapshot creation + trend queries
-migrations/
-  001_create_resources.sql  # Schema with indexes on service and account_id
-  002_create_cost_snapshots.sql  # Cost snapshots for trend tracking
-docker-compose.yml          # PostgreSQL 16 setup
+    trends.go               # Aggregated trends for the /api/trends endpoint
+  migrations/
+    migrations.go           # go:embed runner executed at app startup
+    001_create_resources.sql
+    002_create_cost_snapshots.sql
+Dockerfile                  # Multi-stage: npm build → go build → alpine runtime
+docker-compose.yml          # Postgres (with healthcheck) + app service
 ```
 
 The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the interface, and `SyntheticProvider`, `AWSProvider`, `GCPProvider`, and `AzureProvider` are the concrete strategies. `factory.go` selects the strategy at runtime based on the `Config` loaded from `internal/config`. This lets `main.go` work with any provider without knowing which one is active.
@@ -100,7 +103,7 @@ Each real provider's `FetchResources` fans out its service calls (for example: E
 | PDF         | go-pdf/fpdf                         |
 | LLM         | Gemini / Claude / OpenAI            |
 | Testing     | `testing` + `httptest`              |
-| Containers  | Docker Compose                      |
+| Containers  | Docker Compose + multi-stage Dockerfile |
 
 ## Getting Started
 
@@ -108,40 +111,48 @@ Each real provider's `FetchResources` fans out its service calls (for example: E
 
 - Go 1.25+
 - Docker & Docker Compose
-- (Optional) AWS CLI configured with a `cloudoracle` profile for real AWS integration (see [AWS Setup](#aws-setup) below)
+- (Optional) AWS CLI configured with a `cloudoracle` profile for real AWS integration (see [Running against cloud providers](#running-against-cloud-providers) below)
 
-### 1. Start the database
+### 1. Start the stack
 
-```bash
-docker compose up -d
-```
-
-### 2. Run the migrations
+Single command for the full demo (Postgres + API + embedded React dashboard):
 
 ```bash
-docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/001_create_resources.sql
-docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/002_create_cost_snapshots.sql
+docker compose up --build
+# → open http://localhost:8080
 ```
 
-### 3. Seed sample data
+Compose brings up two services:
+- **postgres** — PostgreSQL 16 with a healthcheck; the app only starts once it responds to `pg_isready`.
+- **app** — multi-stage build of the Go binary with the React bundle embedded via `go:embed`, exposed on `:8080`.
+
+The app auto-applies the SQL migrations in `internal/migrations/*.sql` on every startup (they're idempotent — `CREATE TABLE/INDEX IF NOT EXISTS`), so there's no separate migration step. To populate demo data:
+
+```bash
+docker compose exec app /app/cloudoracle seed --count 120
+```
+
+For local development without Docker you still need Postgres running somewhere; the easiest is `docker compose up -d postgres` and then run the Go binary on the host. Migrations run automatically whichever way you boot the app.
+
+### 2. Seed sample data
 
 ```bash
 go run cmd/oracle/main.go seed --account acc-001 --count 100
 ```
 
-### 4. List all resources
+### 3. List all resources
 
 ```bash
 go run cmd/oracle/main.go list
 ```
 
-### 5. Run the cost analyzer
+### 4. Run the cost analyzer
 
 ```bash
 go run cmd/oracle/main.go analyze
 ```
 
-### 6. Generate a PDF report
+### 5. Generate a PDF report
 
 ```bash
 go run cmd/oracle/main.go report --output cloudoracle-report.pdf
@@ -156,7 +167,7 @@ This generates a professional PDF with:
 
 ![CloudOracle PDF report example](examplepdf.png)
 
-### 7. View cost trends
+### 6. View cost trends
 
 Each `seed` automatically creates a cost snapshot. After running `seed` multiple times (on different days or with different data), view how costs change:
 
@@ -177,7 +188,7 @@ rds          $   180.00 $   195.00    +15.00 (+8.3%)  ↑
 Total        $   742.50 $   798.10    +55.60 (+7.5%)  ↑
 ```
 
-### 8. Export findings to JSON or CSV
+### 7. Export findings to JSON or CSV
 
 Run the analyzer and pipe its findings into another tool — a dashboard, a spreadsheet, a ticketing system. By default, the exporter writes to stdout so it composes naturally with shell pipelines; pass `--output` to write to a file.
 
@@ -194,7 +205,7 @@ go run cmd/oracle/main.go export --format=json | jq '.[] | select(.Severity == "
 
 The JSON output is an array of `Finding` objects. The CSV output has a fixed header: `resource_id, service, resource_type, region, rule, severity, monthly_cost, monthly_savings, description, recommendation`. Numeric fields are formatted with two decimals. Commas, quotes, and newlines in descriptions are escaped per RFC 4180 — the output is safe to open in Excel or parse with any standard CSV library.
 
-### 9. Web dashboard
+### 8. Web dashboard
 
 CloudOracle ships a React + Recharts dashboard that reads the same database as the CLI. There are two workflows:
 
@@ -229,7 +240,7 @@ npm run dev
 
 > **Note:** `go:embed` requires `internal/api/dist/` to exist at compile time. The repo commits a `.gitkeep` so `go build` always works — if you haven't run `npm run build`, visiting the root route shows a "Dashboard bundle not found" page with instructions. The JSON API at `/api/*` works either way.
 
-### 10. (Optional) Enable the LLM-powered executive summary
+### 9. (Optional) Enable the LLM-powered executive summary
 
 The `report` command will automatically call an LLM provider if any supported API key is present in the environment. No flags required — just export a key and run `report` again. If no key is configured, the PDF is still generated without the narrative section.
 
@@ -279,18 +290,35 @@ Summary per service
   rds  -> 2 problems, save: $15.00/month
 ```
 
-## AWS Setup
+## Running against cloud providers
 
-To use the real AWS provider (`CLOUDORACLE_PROVIDER=aws`), you need an AWS profile in `~/.aws/credentials`. The default profile name is `cloudoracle` and the default region is `us-east-2` — both are overridable via `AWS_PROFILE` and `AWS_REGION`:
+CloudOracle supports four resource sources, selected at runtime with the `CLOUDORACLE_PROVIDER` env var: **synthetic** (default, no cloud account required), **aws**, **gcp**, **azure**. The analyzer, report, and dashboard work identically with all four — they only differ in where the resource inventory comes from.
 
-```ini
-[cloudoracle]
-aws_access_key_id = AKIA...
-aws_secret_access_key = ...
-region = us-east-2
+> **Tested status.** The **synthetic** and **AWS** providers have been exercised end-to-end against a live AWS account during development. The **GCP** and **Azure** providers are implemented against their respective SDKs with the same structure and the code compiles + unit-tests pass, **but they have not been run against live GCP / Azure subscriptions** because I don't have credentials for those clouds at the time of writing. Field-mapping tests use struct literals; the SDK call paths themselves are unverified. If you test either, please open an issue with what you find.
+
+### Synthetic (default, no setup)
+
+No credentials, no network calls — the app generates realistic EC2 / RDS / EBS / Lambda records locally. Ideal for demos, CI, and trying the dashboard in seconds.
+
+```bash
+docker compose up --build
+docker compose exec app /app/cloudoracle seed --count 120
+# open http://localhost:8080
 ```
 
-The IAM user needs read-only access to inventory the cloud resources. For development, we use `ReadOnlyAccess` + `AWSBillingReadOnlyAccess` managed policies. Production would scope permissions to least privilege:
+Tunables:
+- `SYNTHETIC_COUNT` (default `100`) — how many resources to generate per `seed`.
+- `SYNTHETIC_ACCOUNT` (default `synthetic-account`) — account ID baked into the records.
+
+The synthetic provider is what 99% of demos use. Everything else in this README — findings, exports, trend tracking, dashboard — works with synthetic data without any cloud credentials.
+
+### AWS (verified)
+
+**1. IAM user with read-only access.** In the AWS Console → IAM → Users → Create user, attach:
+- `ReadOnlyAccess`
+- `AWSBillingReadOnlyAccess`
+
+Grab the access key + secret. For least-privilege in production, the minimum set is:
 
 ```
 ec2:DescribeInstances, ec2:DescribeVolumes
@@ -300,44 +328,109 @@ ce:GetCostAndUsage
 sts:GetCallerIdentity
 ```
 
-The provider validates credentials at startup via `sts:GetCallerIdentity` — if the profile is misconfigured or credentials are expired, the error appears immediately instead of failing mid-scan.
+**2. Configure a local profile.** In `~/.aws/credentials` (or `%USERPROFILE%\.aws\credentials` on Windows):
 
-## GCP Setup
+```ini
+[cloudoracle]
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
+region = us-east-2
+```
 
-To use the GCP provider (`CLOUDORACLE_PROVIDER=gcp`), you need:
+The profile name `cloudoracle` and region `us-east-2` are the defaults. Override with `AWS_PROFILE=xxx` and `AWS_REGION=eu-west-1` if you use different names.
 
-1. A GCP project with the following APIs enabled: Compute Engine, Cloud SQL Admin, Cloud Functions
-2. Application Default Credentials configured via one of:
-   - `gcloud auth application-default login` (development)
-   - `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a service account JSON (production)
-3. `GOOGLE_CLOUD_PROJECT` env var set to your project ID
+**3. Run the app on the host** (so it can read `~/.aws/credentials`), pointing at the Postgres container:
+
+```bash
+docker compose up -d postgres              # DB only in Docker
+export CLOUDORACLE_PROVIDER=aws
+go run ./cmd/oracle seed                   # fetches real EC2/RDS/EBS/Lambda, upserts, snapshots
+go run ./cmd/oracle analyze                # runs rules → findings on real data
+go run ./cmd/oracle serve --port 8080      # dashboard + API
+```
+
+The STS `GetCallerIdentity` call at startup validates credentials immediately — if the profile is misconfigured or keys are expired, you get the error right away instead of halfway through a scan.
+
+**Running inside Docker with AWS creds** (if you want `docker compose up app` against AWS), pass the creds as env vars to the `app` service in `docker-compose.yml`:
+
+```yaml
+environment:
+  CLOUDORACLE_PROVIDER: aws
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+  AWS_REGION: us-east-2
+```
+
+The AWS SDK v2 auto-picks these up without needing a profile file. Recommended only for demos — for prod/CI, use IAM roles via instance metadata or IRSA on EKS, not static keys.
+
+**Cost:** `Describe*` / `List*` calls are free. A full `seed` against a typical account is ~5-10 API calls total.
+
+### GCP (untested against a live account)
+
+> Implemented but not verified against a real GCP project.
+
+Expected flow:
+
+1. Enable APIs on your project: Compute Engine, Cloud SQL Admin, Cloud Functions.
+2. Set up Application Default Credentials:
+   - Dev: `gcloud auth application-default login`
+   - Prod: `GOOGLE_APPLICATION_CREDENTIALS=/path/to/sa.json`
+3. Export `GOOGLE_CLOUD_PROJECT=your-project-id`.
 
 Required IAM roles (least privilege):
+
 ```
 compute.instances.list, compute.disks.list
 cloudsql.instances.list
 cloudfunctions.functions.list
 ```
 
-## Azure Setup
+Then:
 
-To use the Azure provider (`CLOUDORACLE_PROVIDER=azure`), you need:
+```bash
+docker compose up -d postgres
+export CLOUDORACLE_PROVIDER=gcp
+export GOOGLE_CLOUD_PROJECT=your-project-id
+go run ./cmd/oracle seed
+go run ./cmd/oracle serve --port 8080
+```
 
-1. `AZURE_SUBSCRIPTION_ID` env var set to your subscription ID
-2. Credentials configured via one of:
-   - Azure CLI: `az login` (development)
-   - Environment variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` (production)
-   - Managed Identity (when running in Azure)
+Since this path hasn't been exercised end-to-end, expect to debug the SDK call mapping on first run.
 
-The provider uses `DefaultAzureCredential` which tries all methods automatically.
+### Azure (untested against a live account)
 
-Required RBAC role: `Reader` on the subscription. Production would scope to:
+> Implemented but not verified against a real Azure subscription.
+
+Expected flow:
+
+1. Export `AZURE_SUBSCRIPTION_ID=<your-subscription-guid>`.
+2. Authenticate via one of:
+   - Dev: `az login`
+   - Service principal: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET`
+   - Managed Identity (when the app runs on Azure)
+
+The provider uses `DefaultAzureCredential`, which tries all methods in order.
+
+Required RBAC role: `Reader` on the subscription. Production scope:
+
 ```
 Microsoft.Compute/virtualMachines/read
 Microsoft.Compute/disks/read
 Microsoft.Sql/servers/read, Microsoft.Sql/servers/databases/read
 Microsoft.Web/sites/read
 ```
+
+Then:
+
+```bash
+docker compose up -d postgres
+export CLOUDORACLE_PROVIDER=azure
+export AZURE_SUBSCRIPTION_ID=00000000-0000-0000-0000-000000000000
+go run ./cmd/oracle seed
+go run ./cmd/oracle serve --port 8080
+```
+
+Same caveat as GCP: no live-account run has been done, so treat first execution as a validation exercise.
 
 ## Environment Variables
 
@@ -449,6 +542,15 @@ Every warning now carries typed attributes (`provider=aws`, `service=EC2`, `erro
 
 ### Why a central `config.Load()` over per-component `os.Getenv`
 Previously every constructor reached into the environment on its own: `NewAWSProvider` for region/profile, `NewGCPProvider` for the project ID, each LLM constructor for its API key, `db.LoadConfigFromEnv` for credentials. That made the contract of each component implicit and the cost of testing high — you had to manipulate real env vars to rearrange behavior. Now `main()` calls `config.Load()` once, and every component receives its typed slice of the config as a parameter. Tests pass struct literals directly.
+
+### Why migrations run from the app at startup (not from `psql` scripts or a separate tool)
+SQL files live in `internal/migrations/*.sql` and are baked into the binary with `go:embed`. On every boot — CLI command or `serve` — `main()` reads them in order and executes each against the pool. Because the statements use `CREATE TABLE/INDEX IF NOT EXISTS`, re-running is a no-op. Trade-offs vs. the alternatives:
+
+- **Postgres `docker-entrypoint-initdb.d` mount**: only runs the very first time a volume is created. If the DB already exists (prod restore, bind mount, CI cache), schema changes never land. Silent and dangerous.
+- **A separate `migrate` CLI step**: adds a second binary and a deploy-ordering problem (app must not start before `migrate` succeeds). `depends_on` helps but doesn't eliminate it.
+- **App-driven startup**: self-contained, idempotent, and works identically whether you boot the binary directly, with Docker Compose, in a test, or in production. The one binary knows how to set up its own schema.
+
+The one thing app-driven migrations don't give you out of the box is a version ledger (`schema_migrations` table) for tracking what's been applied. For a 2-file schema it's overkill; if the project grows a destructive migration (e.g. a column rename) we'd add one. Until then, `IF NOT EXISTS` is enough.
 
 ## Lessons Learned
 

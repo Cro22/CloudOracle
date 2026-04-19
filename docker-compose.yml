@@ -10,6 +10,31 @@ services:
       - "5432:5432"
     volumes:
       - oracle_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oracle -d cloudoracle"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    image: cloudoracle:latest
+    container_name: cloudoracle-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: oracle
+      DB_PASSWORD: oracle_dev
+      DB_NAME: cloudoracle
+      CLOUDORACLE_PROVIDER: synthetic
+      LOG_LEVEL: info
+      LOG_FORMAT: text
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
 
 volumes:
   oracle_data:

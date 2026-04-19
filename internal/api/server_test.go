@@ -152,3 +152,120 @@ func TestParsePositiveInt(t *testing.T) {
 		t.Error("expected error for non-numeric")
 	}
 }
+
+func TestParseIntOr_Defaults(t *testing.T) {
+	if got := parseIntOr("", 7); got != 7 {
+		t.Errorf("empty → default, got %d", got)
+	}
+	if got := parseIntOr("garbage", 7); got != 7 {
+		t.Errorf("invalid → default, got %d", got)
+	}
+	if got := parseIntOr("42", 7); got != 42 {
+		t.Errorf("valid → parsed, got %d", got)
+	}
+}
+
+func TestClampInt(t *testing.T) {
+	if got := clampInt(5, 1, 10); got != 5 {
+		t.Errorf("in-range value kept, got %d", got)
+	}
+	if got := clampInt(-3, 1, 10); got != 1 {
+		t.Errorf("below lo → lo, got %d", got)
+	}
+	if got := clampInt(999, 1, 10); got != 10 {
+		t.Errorf("above hi → hi, got %d", got)
+	}
+}
+
+func TestNormalizeSortColumn(t *testing.T) {
+	cases := map[string]string{
+		"severity": "severity",
+		"Severity": "severity",
+		"SERVICE":  "service",
+		"cost":     "cost",
+		"savings":  "savings",
+		"":         "",
+		"unknown":  "",
+		"id":       "",
+	}
+	for in, want := range cases {
+		if got := normalizeSortColumn(in); got != want {
+			t.Errorf("normalizeSortColumn(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestNormalizeOrder(t *testing.T) {
+	if got := normalizeOrder("asc"); got != "asc" {
+		t.Errorf("asc should pass through, got %q", got)
+	}
+	if got := normalizeOrder("ASC"); got != "asc" {
+		t.Errorf("case-insensitive asc, got %q", got)
+	}
+	if got := normalizeOrder(""); got != "desc" {
+		t.Errorf("empty defaults to desc, got %q", got)
+	}
+	if got := normalizeOrder("anything-else"); got != "desc" {
+		t.Errorf("unknown defaults to desc, got %q", got)
+	}
+}
+
+func TestSortFindings_BySavingsDesc(t *testing.T) {
+	findings := []shared.Finding{
+		{ResourceID: "a", MonthlySavings: 10},
+		{ResourceID: "b", MonthlySavings: 50},
+		{ResourceID: "c", MonthlySavings: 30},
+	}
+	sortFindings(findings, "savings", "desc")
+	want := []string{"b", "c", "a"}
+	for i, f := range findings {
+		if f.ResourceID != want[i] {
+			t.Errorf("position %d: got %s, want %s", i, f.ResourceID, want[i])
+		}
+	}
+}
+
+func TestSortFindings_BySeverityAsc(t *testing.T) {
+	findings := []shared.Finding{
+		{ResourceID: "a", Severity: shared.SeverityHigh},
+		{ResourceID: "b", Severity: shared.SeverityLow},
+		{ResourceID: "c", Severity: shared.SeverityMedium},
+	}
+	sortFindings(findings, "severity", "asc")
+	want := []string{"b", "c", "a"}
+	for i, f := range findings {
+		if f.ResourceID != want[i] {
+			t.Errorf("position %d: got %s, want %s", i, f.ResourceID, want[i])
+		}
+	}
+}
+
+func TestSortFindings_ByService(t *testing.T) {
+	findings := []shared.Finding{
+		{ResourceID: "a", Service: "rds"},
+		{ResourceID: "b", Service: "ebs"},
+		{ResourceID: "c", Service: "ec2"},
+	}
+	sortFindings(findings, "service", "asc")
+	want := []string{"b", "c", "a"}
+	for i, f := range findings {
+		if f.ResourceID != want[i] {
+			t.Errorf("position %d: got %s, want %s", i, f.ResourceID, want[i])
+		}
+	}
+}
+
+func TestSortFindings_StableForEqualKeys(t *testing.T) {
+	findings := []shared.Finding{
+		{ResourceID: "a", Severity: shared.SeverityHigh},
+		{ResourceID: "b", Severity: shared.SeverityHigh},
+		{ResourceID: "c", Severity: shared.SeverityHigh},
+	}
+	sortFindings(findings, "severity", "desc")
+	want := []string{"a", "b", "c"}
+	for i, f := range findings {
+		if f.ResourceID != want[i] {
+			t.Errorf("stable sort lost order at %d: got %s, want %s", i, f.ResourceID, want[i])
+		}
+	}
+}

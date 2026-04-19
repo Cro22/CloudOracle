@@ -8,5 +8,5 @@ CREATE TABLE IF NOT EXISTS cost_snapshots
     total_monthly_cost NUMERIC(12, 2) NOT NULL
 );
 
-CREATE INDEX idx_snapshots_taken_at ON cost_snapshots (taken_at);
-CREATE INDEX idx_snapshots_account ON cost_snapshots (account_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_taken_at ON cost_snapshots (taken_at);
+CREATE INDEX IF NOT EXISTS idx_snapshots_account ON cost_snapshots (account_id);
