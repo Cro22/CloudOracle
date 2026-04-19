@@ -579,4 +579,4 @@ Building this project surfaced a subtle but important bug that would have gone u
 
 ## License
 
-MIT
+Apache 2.0
