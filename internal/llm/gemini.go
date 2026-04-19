@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/shared"
 	"bytes"
 	"context"
@@ -9,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"time"
 )
 
 type GeminiProvider struct {
@@ -19,16 +18,15 @@ type GeminiProvider struct {
 	client *http.Client
 }
 
-func newGeminiFromEnv() (*GeminiProvider, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	if apiKey == "" {
+func newGemini(cfg config.LLMConfig) (*GeminiProvider, error) {
+	if cfg.GeminiAPIKey == "" {
 		return nil, errors.New("GEMINI_API_KEY is not set")
 	}
 
 	return &GeminiProvider{
-		apiKey: apiKey,
+		apiKey: cfg.GeminiAPIKey,
 		model:  "gemini-2.5-flash",
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: cfg.RequestTimeout},
 	}, nil
 }
 

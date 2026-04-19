@@ -2,17 +2,23 @@ package main
 
 import (
 	"CloudOracle/internal/analyzer"
+	"CloudOracle/internal/api"
+	"CloudOracle/internal/cloud"
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
-	"CloudOracle/internal/generator"
 	"CloudOracle/internal/llm"
+	"CloudOracle/internal/logging"
 	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"io"
+	"log/slog"
 	"os"
+	"sort"
+	"strings"
 )
 
 func main() {
@@ -20,23 +26,37 @@ func main() {
 		printUsage()
 		os.Exit(1)
 	}
+
+	cfg := config.Load()
+	logging.Setup(cfg.LogLevel, cfg.LogFormat)
+
 	ctx := context.Background()
-	cfg := db.LoadConfigFromEnv()
-	pool, err := db.Connect(ctx, cfg)
+	pool, err := db.Connect(ctx, cfg.DB)
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
 	}
 	defer pool.Close()
-	log.Println("✓ Connected to database!")
+	slog.Info("connected to database",
+		"host", cfg.DB.Host,
+		"database", cfg.DB.Database,
+	)
+
 	switch os.Args[1] {
 	case "seed":
-		runSeed(ctx, pool, os.Args[2:])
+		runSeed(ctx, pool, cfg, os.Args[2:])
 	case "list":
 		runList(ctx, pool)
 	case "analyze":
 		runAnalyze(ctx, pool)
 	case "report":
-		runReport(ctx, pool, os.Args[2:])
+		runReport(ctx, pool, cfg, os.Args[2:])
+	case "trend":
+		runTrend(ctx, pool, os.Args[2:])
+	case "export":
+		runExport(ctx, pool, os.Args[2:])
+	case "serve":
+		runServe(pool, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -45,34 +65,71 @@ func main() {
 }
 
 func printUsage() {
-	fmt.Println("CloudOracle - FindOps for AWS - GCP - Azure")
+	fmt.Println("CloudOracle - FinOps for AWS - GCP - Azure")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  oracle seed <account_id> <num_resources>  - Generate and insert random resources for an account")
+	fmt.Println("  oracle seed [--count N] [--account ID]   - Fetch resources and insert into database")
 	fmt.Println("  oracle list                              - List all resources ordered by monthly cost")
-	fmt.Println("  oracle report --output report.pdf")
+	fmt.Println("  oracle analyze                           - Run cost optimization rules")
+	fmt.Println("  oracle report [--output file.pdf]        - Generate PDF report")
+	fmt.Println("  oracle trend [--days N]                  - Show cost trends over time")
+	fmt.Println("  oracle export --format=json|csv [--output file] - Export findings to JSON or CSV (stdout by default)")
+	fmt.Println("  oracle serve [--port 8080]               - Start the HTTP API for the dashboard")
 }
 
-func runSeed(ctx context.Context, pool *db.Pool, args []string) {
+func runSeed(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
 	fs := flag.NewFlagSet("seed", flag.ExitOnError)
-	count := fs.Int("count", 100, "Number of resources to generate")
-	account := fs.String("account", "acc-001", "Account ID to associate with generated resources")
-	err := fs.Parse(args)
+	count := fs.Int("count", cfg.Cloud.SyntheticCount, "Number of resources to generate")
+	account := fs.String("account", cfg.Cloud.SyntheticAcct, "Account ID to associate with generated resources")
+	if err := fs.Parse(args); err != nil {
+		slog.Error("failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+
+	provider, err := cloud.NewProvider(ctx, cfg)
 	if err != nil {
-		log.Fatalf("Failed to parse flags: %v", err)
+		slog.Error("failed to create provider", "error", err)
+		os.Exit(1)
 	}
-	log.Println("Generating resources...")
-	resources := generator.GenerateResources(*count, *account)
+
+	if provider.Name() == "synthetic" {
+		provider = cloud.NewSyntheticProvider(*count, *account)
+	} else {
+		slog.Info("using real provider — synthetic flags are ignored",
+			"provider", provider.Name(),
+		)
+	}
+
+	slog.Info("fetching resources", "provider", provider.Name())
+	resources, err := provider.FetchResources(ctx)
+	if err != nil {
+		slog.Error("failed to fetch resources",
+			"provider", provider.Name(),
+			"error", err,
+		)
+		os.Exit(1)
+	}
 	if err := db.InsertResources(ctx, pool, resources); err != nil {
-		log.Fatalf("Failed to insert resources: %v", err)
+		slog.Error("failed to insert resources", "error", err)
+		os.Exit(1)
 	}
-	log.Printf("Generated %d resources for account %s", len(resources), *account)
+	slog.Info("inserted resources",
+		"count", len(resources),
+		"provider", provider.Name(),
+	)
+
+	if err := db.CreateSnapshot(ctx, pool, resources); err != nil {
+		slog.Warn("failed to create cost snapshot, continuing", "error", err)
+	} else {
+		slog.Info("cost snapshot recorded")
+	}
 }
 
 func runList(ctx context.Context, pool *db.Pool) {
 	resources, err := db.ListResources(ctx, pool)
 	if err != nil {
-		log.Fatalf("Failed to list resources: %v", err)
+		slog.Error("failed to list resources", "error", err)
+		os.Exit(1)
 	}
 	fmt.Printf("%-20s %-8s %-20s %-12s %12s %10s\n",
 		"ID", "SERVICE", "TYPE", "REGION", "COST/MONTH", "USAGE")
@@ -91,16 +148,17 @@ func runList(ctx context.Context, pool *db.Pool) {
 func runAnalyze(ctx context.Context, pool *db.Pool) {
 	resources, err := db.ListResources(ctx, pool)
 	if err != nil {
-		log.Fatalf("Failed to list resources: %v", err)
+		slog.Error("failed to list resources", "error", err)
+		os.Exit(1)
 	}
 	if len(resources) == 0 {
-		log.Println("No resources to analyze")
+		slog.Info("no resources to analyze")
 		return
 	}
 	findings := analyzer.Analyze(resources)
 
 	if len(findings) == 0 {
-		log.Println("✓ No findings to report. All looks good")
+		slog.Info("no findings to report, all looks good")
 		return
 	}
 	var totalWaste float64
@@ -151,14 +209,15 @@ func printSummaryByService(findings []shared.Finding) {
 	fmt.Println()
 }
 
-func runReport(ctx context.Context, pool *db.Pool, args []string) {
+func runReport(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	output := fs.String("output", "cloudoracle-report.pdf", "output PDF file path")
 	fs.Parse(args)
 
 	resources, err := db.ListResources(ctx, pool)
 	if err != nil {
-		log.Fatalf("error loading resources: %v", err)
+		slog.Error("failed to load resources", "error", err)
+		os.Exit(1)
 	}
 
 	if len(resources) == 0 {
@@ -174,27 +233,194 @@ func runReport(ctx context.Context, pool *db.Pool, args []string) {
 	}
 
 	var aiSummary string
-	provider, err := llm.NewProvider()
+	provider, err := llm.NewProvider(cfg.LLM)
 	if err != nil {
 		if errors.Is(err, llm.ErrNoProvider) {
-			log.Println("ℹ No LLM provider configured, skipping AI summary")
+			slog.Info("no LLM provider configured, skipping AI summary")
 		} else {
-			log.Printf("⚠ LLM provider error: %v (continuing without AI summary)", err)
+			slog.Warn("LLM provider error, continuing without AI summary", "error", err)
 		}
 	} else {
-		log.Printf("Generating AI summary using %s...", provider.Name())
+		slog.Info("generating AI summary", "provider", provider.Name())
 		aiSummary, err = provider.GenerateSummary(ctx, findings)
 		if err != nil {
-			log.Printf("⚠ Failed to generate AI summary: %v", err)
+			slog.Warn("failed to generate AI summary", "error", err)
 			aiSummary = ""
 		}
 	}
 
-	log.Printf("Generating PDF with %d findings...", len(findings))
+	slog.Info("generating PDF", "findings", len(findings))
 
 	if err := report.GeneratePDF(findings, aiSummary, *output); err != nil {
-		log.Fatalf("error generating PDF: %v", err)
+		slog.Error("failed to generate PDF", "error", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("✓ Report generated: %s\n", *output)
+}
+
+func runTrend(ctx context.Context, pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("trend", flag.ExitOnError)
+	days := fs.Int("days", 90, "Number of days to look back")
+	fs.Parse(args)
+
+	snapshots, err := db.ListSnapshots(ctx, pool, *days)
+	if err != nil {
+		slog.Error("failed to list snapshots", "error", err)
+		os.Exit(1)
+	}
+
+	if len(snapshots) == 0 {
+		fmt.Println("No snapshots found. Run 'oracle seed' to create cost snapshots.")
+		return
+	}
+
+	type trend struct {
+		OldestCost float64
+		LatestCost float64
+		OldestDate string
+		LatestDate string
+	}
+
+	trends := make(map[string]*trend)
+
+	for _, s := range snapshots {
+		date := s.TakenAt.Format("2006-01-02")
+		t, exists := trends[s.Service]
+		if !exists {
+			t = &trend{
+				OldestCost: s.TotalMonthlyCost,
+				LatestCost: s.TotalMonthlyCost,
+				OldestDate: date,
+				LatestDate: date,
+			}
+			trends[s.Service] = t
+			continue
+		}
+		if date < t.OldestDate {
+			t.OldestCost = s.TotalMonthlyCost
+			t.OldestDate = date
+		}
+		if date > t.LatestDate {
+			t.LatestCost = s.TotalMonthlyCost
+			t.LatestDate = date
+		}
+	}
+
+	services := make([]string, 0, len(trends))
+	for svc := range trends {
+		services = append(services, svc)
+	}
+	sort.Strings(services)
+
+	snapshotCount := countUniqueSnapshots(snapshots)
+	fmt.Printf("Cost Trends (last %d days, %d snapshots)\n\n", *days, snapshotCount)
+	fmt.Printf("%-12s %12s %12s %14s\n", "Service", "Oldest", "Latest", "Change")
+	fmt.Println(strings.Repeat("─", 56))
+
+	var totalOldest, totalLatest float64
+	for _, svc := range services {
+		t := trends[svc]
+		printTrendLine(svc, t.OldestCost, t.LatestCost)
+		totalOldest += t.OldestCost
+		totalLatest += t.LatestCost
+	}
+
+	fmt.Println(strings.Repeat("─", 56))
+	printTrendLine("Total", totalOldest, totalLatest)
+}
+
+func printTrendLine(label string, oldest, latest float64) {
+	change := latest - oldest
+	arrow := "→"
+	if change > 0.005 {
+		arrow = "↑"
+	}
+	if change < -0.005 {
+		arrow = "↓"
+	}
+
+	pct := 0.0
+	if oldest > 0 {
+		pct = (change / oldest) * 100
+	}
+
+	fmt.Printf("%-12s $%10.2f $%10.2f  %+7.2f (%+.1f%%) %s\n",
+		label, oldest, latest, change, pct, arrow)
+}
+
+func countUniqueSnapshots(snapshots []db.Snapshot) int {
+	seen := make(map[string]bool)
+	for _, s := range snapshots {
+		seen[s.TakenAt.Format("2006-01-02 15:04")] = true
+	}
+	return len(seen)
+}
+
+func runExport(ctx context.Context, pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	format := fs.String("format", "json", "Output format: json or csv")
+	output := fs.String("output", "", "Output file path (default: stdout)")
+	if err := fs.Parse(args); err != nil {
+		slog.Error("failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+
+	resources, err := db.ListResources(ctx, pool)
+	if err != nil {
+		slog.Error("failed to load resources", "error", err)
+		os.Exit(1)
+	}
+
+	findings := analyzer.Analyze(resources)
+
+	writer := io.Writer(os.Stdout)
+	if *output != "" {
+		f, err := os.Create(*output)
+		if err != nil {
+			slog.Error("failed to create output file", "path", *output, "error", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		writer = f
+	}
+
+	switch strings.ToLower(*format) {
+	case "json":
+		err = report.ExportJSON(writer, findings)
+	case "csv":
+		err = report.ExportCSV(writer, findings)
+	default:
+		slog.Error("unknown format (use 'json' or 'csv')", "format", *format)
+		os.Exit(1)
+	}
+
+	if err != nil {
+		slog.Error("failed to export findings", "format", *format, "error", err)
+		os.Exit(1)
+	}
+
+	if *output != "" {
+		slog.Info("exported findings",
+			"count", len(findings),
+			"format", *format,
+			"path", *output,
+		)
+	}
+}
+
+func runServe(pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	port := fs.String("port", "8080", "Port to listen on")
+	if err := fs.Parse(args); err != nil {
+		slog.Error("failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+
+	server := api.NewServer(pool)
+	slog.Info("Dashboard available", "url", fmt.Sprintf("http://localhost:%s", *port))
+	if err := server.Start(":" + *port); err != nil {
+		slog.Error("API server failed", "error", err)
+		os.Exit(1)
+	}
 }

@@ -1,32 +1,20 @@
 package llm
 
 import (
+	"CloudOracle/internal/config"
 	"errors"
-	"os"
 	"testing"
 )
 
-func clearLLMEnv(t *testing.T) {
-	t.Helper()
-	for _, key := range []string{"LLM_PROVIDER", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"} {
-		t.Setenv(key, "")
-		os.Unsetenv(key)
-	}
-}
-
 func TestNewProvider_NoKeysReturnsErrNoProvider(t *testing.T) {
-	clearLLMEnv(t)
-	_, err := NewProvider()
+	_, err := NewProvider(config.LLMConfig{})
 	if !errors.Is(err, ErrNoProvider) {
 		t.Errorf("expected ErrNoProvider, got %v", err)
 	}
 }
 
 func TestNewProvider_ExplicitGemini(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("LLM_PROVIDER", "gemini")
-	t.Setenv("GEMINI_API_KEY", "test-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{Provider: "gemini", GeminiAPIKey: "test-key"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -36,10 +24,7 @@ func TestNewProvider_ExplicitGemini(t *testing.T) {
 }
 
 func TestNewProvider_ExplicitClaude(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("LLM_PROVIDER", "claude")
-	t.Setenv("ANTHROPIC_API_KEY", "test-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{Provider: "claude", ClaudeAPIKey: "test-key"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,10 +34,7 @@ func TestNewProvider_ExplicitClaude(t *testing.T) {
 }
 
 func TestNewProvider_ExplicitOpenAI(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("LLM_PROVIDER", "openai")
-	t.Setenv("OPENAI_API_KEY", "test-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{Provider: "openai", OpenAIAPIKey: "test-key"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -62,9 +44,7 @@ func TestNewProvider_ExplicitOpenAI(t *testing.T) {
 }
 
 func TestNewProvider_UnknownProviderReturnsError(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("LLM_PROVIDER", "grok")
-	_, err := NewProvider()
+	_, err := NewProvider(config.LLMConfig{Provider: "grok"})
 	if err == nil {
 		t.Fatal("expected error for unknown provider")
 	}
@@ -74,11 +54,11 @@ func TestNewProvider_UnknownProviderReturnsError(t *testing.T) {
 }
 
 func TestNewProvider_AutoDetectGeminiFirst(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("GEMINI_API_KEY", "gemini-key")
-	t.Setenv("ANTHROPIC_API_KEY", "claude-key")
-	t.Setenv("OPENAI_API_KEY", "openai-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{
+		GeminiAPIKey: "gemini-key",
+		ClaudeAPIKey: "claude-key",
+		OpenAIAPIKey: "openai-key",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -88,10 +68,10 @@ func TestNewProvider_AutoDetectGeminiFirst(t *testing.T) {
 }
 
 func TestNewProvider_AutoDetectClaudeSecond(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("ANTHROPIC_API_KEY", "claude-key")
-	t.Setenv("OPENAI_API_KEY", "openai-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{
+		ClaudeAPIKey: "claude-key",
+		OpenAIAPIKey: "openai-key",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -101,9 +81,7 @@ func TestNewProvider_AutoDetectClaudeSecond(t *testing.T) {
 }
 
 func TestNewProvider_AutoDetectOpenAIThird(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("OPENAI_API_KEY", "openai-key")
-	p, err := NewProvider()
+	p, err := NewProvider(config.LLMConfig{OpenAIAPIKey: "openai-key"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -113,10 +91,7 @@ func TestNewProvider_AutoDetectOpenAIThird(t *testing.T) {
 }
 
 func TestNewProvider_ExplicitWithoutKeyReturnsError(t *testing.T) {
-	clearLLMEnv(t)
-	t.Setenv("LLM_PROVIDER", "gemini")
-	// GEMINI_API_KEY not set
-	_, err := NewProvider()
+	_, err := NewProvider(config.LLMConfig{Provider: "gemini"})
 	if err == nil {
 		t.Fatal("expected error when explicit provider key is missing")
 	}

@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-91%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-103%20passing-brightgreen)
 ![Go Version](https://img.shields.io/badge/go-1.25-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -12,6 +12,10 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
 
 ## Features
 
+- **Multi-cloud support** - Switch between AWS, GCP, Azure, and synthetic data via a single env var (`CLOUDORACLE_PROVIDER`)
+- **Real AWS integration** - Fetches live EC2 instances, RDS databases, EBS volumes, and Lambda functions using AWS SDK v2 with STS credential validation
+- **Real GCP integration** - Fetches Compute Engine VMs, Cloud SQL instances, Persistent Disks, and Cloud Functions using Google Cloud Go client libraries
+- **Real Azure integration** - Fetches Virtual Machines, Azure SQL databases, Managed Disks, and Function Apps using Azure SDK for Go
 - **Synthetic data generation** - Realistic resource simulation across EC2, RDS, EBS, and Lambda with configurable account IDs and resource counts
 - **PostgreSQL persistence** - Transactional bulk inserts with upsert support (`ON CONFLICT DO UPDATE`)
 - **Rule-based analysis engine** - Pluggable rules architecture where each rule is a pure function `Resource -> Finding`
@@ -24,15 +28,33 @@ Cloud waste is a real problem. Companies routinely overspend 20-30% on cloud inf
 - **Service summary** - Aggregated view of findings and potential savings per AWS service
 - **PDF report generation** - Professional executive-style PDF reports with severity-coded tables, recommended actions, and annual savings projections
 - **LLM-powered executive summaries** - Pluggable provider layer (Gemini, Claude, OpenAI) that turns raw findings into a CTO/CFO-ready narrative embedded directly into the PDF report
+- **Cost trend tracking** - Automatic cost snapshots on every seed, with a `trend` command that shows per-service cost changes over time with directional arrows and percentage deltas
+- **Parallel resource fetching** - Each provider fans out service calls (Compute / SQL / Disks / Functions) concurrently with `errgroup`, cutting scan time on accounts with many services
+- **Per-service timeouts** - Every API call to a cloud service is wrapped in `context.WithTimeout` so a single slow region can't stall the entire scan
+- **Structured logging (`log/slog`)** - Every log line carries typed attributes (`provider`, `service`, `error`, ...), with pluggable text or JSON output for ingestion into log aggregators
+- **Centralized configuration** - A single `config.Load()` reads every env var up front and is injected into the cloud, LLM, and DB layers — no component reaches for `os.Getenv` on its own
+- **Export findings to JSON or CSV** - Pipe analyzer output into downstream tooling (dashboards, spreadsheets, ticket systems) via `oracle export --format=json|csv`, writing to stdout or a file
+- **Single-binary web dashboard** - React + Recharts UI embedded into the Go binary via `go:embed`; `oracle serve` boots API and dashboard on one port with no external assets required
 
 ## Architecture
 
 ```
-cmd/oracle/main.go          # CLI entry point (seed, list, analyze, report)
+cmd/oracle/main.go          # CLI entry point (seed, list, analyze, report, trend)
 internal/
+  config/
+    config.go               # Central Config + Load(): reads every env var up front
+  logging/
+    logging.go              # slog setup (text or JSON, configurable level)
   shared/
     resource.go             # Resource domain model
     finding.go              # Finding + Severity types
+  cloud/
+    provider.go             # CloudProvider interface (Strategy pattern)
+    factory.go              # Provider factory: Config -> concrete provider
+    synthetic_provider.go   # Synthetic data provider (dev/demo)
+    aws_provider.go         # Real AWS provider — parallel fetchers with per-service timeouts
+    gcp_provider.go         # Real GCP provider — parallel fetchers with per-service timeouts
+    azure_provider.go       # Real Azure provider — parallel fetchers with per-service timeouts
   generator/
     generator.go            # Synthetic data generation for EC2, RDS, EBS, Lambda
   analyzer/
@@ -40,8 +62,9 @@ internal/
     rules.go                # Detection rules (pure functions)
   report/
     pdf.go                  # PDF report generator (executive summary + findings table)
+    export.go               # JSON and CSV exporters for findings
   llm/
-    provider.go             # Provider interface + env-based factory (Gemini / Claude / OpenAI)
+    provider.go             # Provider interface + Config-driven factory (Gemini / Claude / OpenAI)
     prompt.go               # Shared prompt builder (findings -> structured analysis)
     gemini.go               # Google Gemini client (gemini-2.5-flash)
     claude.go               # Anthropic Claude client (claude-haiku-4-5)
@@ -49,22 +72,35 @@ internal/
   db/
     db.go                   # PostgreSQL connection pool (pgx)
     insert.go               # Transactional insert + query logic
+    snapshots.go            # Cost snapshot creation + trend queries
 migrations/
   001_create_resources.sql  # Schema with indexes on service and account_id
+  002_create_cost_snapshots.sql  # Cost snapshots for trend tracking
 docker-compose.yml          # PostgreSQL 16 setup
 ```
 
+The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the interface, and `SyntheticProvider`, `AWSProvider`, `GCPProvider`, and `AzureProvider` are the concrete strategies. `factory.go` selects the strategy at runtime based on the `Config` loaded from `internal/config`. This lets `main.go` work with any provider without knowing which one is active.
+
+Configuration is loaded once in `main()` via `config.Load()` and injected downward. No component in `cloud/`, `llm/`, or `db/` calls `os.Getenv` directly — every dependency arrives as a typed struct field. This keeps the surface area predictable, makes the code easy to test with struct literals, and means adding a new env var is a single-file change in `internal/config/config.go`.
+
+Each real provider's `FetchResources` fans out its service calls (for example: EC2, RDS, EBS, and Lambda on AWS) onto separate goroutines via `golang.org/x/sync/errgroup`. Each goroutine wraps its API call in `context.WithTimeout(cfg.ServiceTimeout)`, so one slow service can't block the others and a regional outage surfaces as a structured warning rather than a hung process. Per-service failures are logged with `slog` and the successful services still return their resources — the scan degrades gracefully instead of failing hard.
+
 ## Tech Stack
 
-| Component    | Technology                |
-|-------------|---------------------------|
-| Language    | Go 1.25                   |
-| Database    | PostgreSQL 16 (Alpine)    |
-| DB Driver   | pgx v5 (connection pool)  |
-| PDF         | go-pdf/fpdf               |
-| LLM         | Gemini / Claude / OpenAI  |
-| Testing     | `testing` + `httptest`    |
-| Containers  | Docker Compose            |
+| Component    | Technology                         |
+|-------------|-------------------------------------|
+| Language    | Go 1.25                             |
+| Database    | PostgreSQL 16 (Alpine)              |
+| DB Driver   | pgx v5 (connection pool)            |
+| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS) |
+| GCP SDK     | Google Cloud Go (Compute, SQL, Functions) |
+| Azure SDK   | Azure SDK for Go (Compute, SQL, App Service) |
+| Concurrency | `golang.org/x/sync/errgroup`        |
+| Logging     | `log/slog` (structured, text/JSON)  |
+| PDF         | go-pdf/fpdf                         |
+| LLM         | Gemini / Claude / OpenAI            |
+| Testing     | `testing` + `httptest`              |
+| Containers  | Docker Compose                      |
 
 ## Getting Started
 
@@ -72,6 +108,7 @@ docker-compose.yml          # PostgreSQL 16 setup
 
 - Go 1.25+
 - Docker & Docker Compose
+- (Optional) AWS CLI configured with a `cloudoracle` profile for real AWS integration (see [AWS Setup](#aws-setup) below)
 
 ### 1. Start the database
 
@@ -79,10 +116,11 @@ docker-compose.yml          # PostgreSQL 16 setup
 docker compose up -d
 ```
 
-### 2. Run the migration
+### 2. Run the migrations
 
 ```bash
 docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/001_create_resources.sql
+docker compose exec -T postgres psql -U oracle -d cloudoracle -f /migrations/002_create_cost_snapshots.sql
 ```
 
 ### 3. Seed sample data
@@ -118,7 +156,80 @@ This generates a professional PDF with:
 
 ![CloudOracle PDF report example](examplepdf.png)
 
-### 7. (Optional) Enable the LLM-powered executive summary
+### 7. View cost trends
+
+Each `seed` automatically creates a cost snapshot. After running `seed` multiple times (on different days or with different data), view how costs change:
+
+```bash
+go run cmd/oracle/main.go trend --days 30
+```
+
+```
+Cost Trends (last 30 days, 3 snapshots)
+
+Service      Oldest       Latest         Change
+────────────────────────────────────────────────────────
+ebs          $   100.00 $    90.00    -10.00 (-10.0%) ↓
+ec2          $   460.00 $   510.00    +50.00 (+10.9%) ↑
+lambda       $     2.50 $     3.10     +0.60 (+24.0%) ↑
+rds          $   180.00 $   195.00    +15.00 (+8.3%)  ↑
+────────────────────────────────────────────────────────
+Total        $   742.50 $   798.10    +55.60 (+7.5%)  ↑
+```
+
+### 8. Export findings to JSON or CSV
+
+Run the analyzer and pipe its findings into another tool — a dashboard, a spreadsheet, a ticketing system. By default, the exporter writes to stdout so it composes naturally with shell pipelines; pass `--output` to write to a file.
+
+```bash
+# Pretty-printed JSON to stdout
+go run cmd/oracle/main.go export --format=json
+
+# CSV to a file (header row + one finding per row)
+go run cmd/oracle/main.go export --format=csv --output findings.csv
+
+# Pipe straight into jq
+go run cmd/oracle/main.go export --format=json | jq '.[] | select(.Severity == "High")'
+```
+
+The JSON output is an array of `Finding` objects. The CSV output has a fixed header: `resource_id, service, resource_type, region, rule, severity, monthly_cost, monthly_savings, description, recommendation`. Numeric fields are formatted with two decimals. Commas, quotes, and newlines in descriptions are escaped per RFC 4180 — the output is safe to open in Excel or parse with any standard CSV library.
+
+### 9. Web dashboard
+
+CloudOracle ships a React + Recharts dashboard that reads the same database as the CLI. There are two workflows:
+
+**Production / demo — one binary, one command.** The Go binary embeds the compiled frontend via `go:embed`, so after a single `npm run build` the whole stack (API + UI) is served on one port.
+
+```bash
+# Build the React bundle into internal/api/dist (go:embed target)
+cd web
+npm install   # first time only
+npm run build
+cd ..
+
+# Build the self-contained binary and run it
+go build -o cloudoracle ./cmd/oracle
+./cloudoracle serve --port 8080
+# → open http://localhost:8080
+```
+
+The binary is fully self-contained. Copy the single file (`cloudoracle` / `cloudoracle.exe`) to any machine, point it at a reachable Postgres via `DB_*` env vars, and the dashboard loads. No `web/` directory needed at runtime.
+
+**Development — hot reload.** During iteration, run the API and the Vite dev server separately so you get HMR on React changes without rebuilding Go:
+
+```bash
+# Terminal 1 — API on :8080
+go run ./cmd/oracle serve --port 8080
+
+# Terminal 2 — Vite on :5173 with /api/* proxied to :8080
+cd web
+npm run dev
+# → open http://localhost:5173
+```
+
+> **Note:** `go:embed` requires `internal/api/dist/` to exist at compile time. The repo commits a `.gitkeep` so `go build` always works — if you haven't run `npm run build`, visiting the root route shows a "Dashboard bundle not found" page with instructions. The JSON API at `/api/*` works either way.
+
+### 10. (Optional) Enable the LLM-powered executive summary
 
 The `report` command will automatically call an LLM provider if any supported API key is present in the environment. No flags required — just export a key and run `report` again. If no key is configured, the PDF is still generated without the narrative section.
 
@@ -168,19 +279,90 @@ Summary per service
   rds  -> 2 problems, save: $15.00/month
 ```
 
+## AWS Setup
+
+To use the real AWS provider (`CLOUDORACLE_PROVIDER=aws`), you need an AWS profile in `~/.aws/credentials`. The default profile name is `cloudoracle` and the default region is `us-east-2` — both are overridable via `AWS_PROFILE` and `AWS_REGION`:
+
+```ini
+[cloudoracle]
+aws_access_key_id = AKIA...
+aws_secret_access_key = ...
+region = us-east-2
+```
+
+The IAM user needs read-only access to inventory the cloud resources. For development, we use `ReadOnlyAccess` + `AWSBillingReadOnlyAccess` managed policies. Production would scope permissions to least privilege:
+
+```
+ec2:DescribeInstances, ec2:DescribeVolumes
+rds:DescribeDBInstances, rds:ListTagsForResource
+lambda:ListFunctions, lambda:ListTags
+ce:GetCostAndUsage
+sts:GetCallerIdentity
+```
+
+The provider validates credentials at startup via `sts:GetCallerIdentity` — if the profile is misconfigured or credentials are expired, the error appears immediately instead of failing mid-scan.
+
+## GCP Setup
+
+To use the GCP provider (`CLOUDORACLE_PROVIDER=gcp`), you need:
+
+1. A GCP project with the following APIs enabled: Compute Engine, Cloud SQL Admin, Cloud Functions
+2. Application Default Credentials configured via one of:
+   - `gcloud auth application-default login` (development)
+   - `GOOGLE_APPLICATION_CREDENTIALS` env var pointing to a service account JSON (production)
+3. `GOOGLE_CLOUD_PROJECT` env var set to your project ID
+
+Required IAM roles (least privilege):
+```
+compute.instances.list, compute.disks.list
+cloudsql.instances.list
+cloudfunctions.functions.list
+```
+
+## Azure Setup
+
+To use the Azure provider (`CLOUDORACLE_PROVIDER=azure`), you need:
+
+1. `AZURE_SUBSCRIPTION_ID` env var set to your subscription ID
+2. Credentials configured via one of:
+   - Azure CLI: `az login` (development)
+   - Environment variables: `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` (production)
+   - Managed Identity (when running in Azure)
+
+The provider uses `DefaultAzureCredential` which tries all methods automatically.
+
+Required RBAC role: `Reader` on the subscription. Production would scope to:
+```
+Microsoft.Compute/virtualMachines/read
+Microsoft.Compute/disks/read
+Microsoft.Sql/servers/read, Microsoft.Sql/servers/databases/read
+Microsoft.Web/sites/read
+```
+
 ## Environment Variables
 
 | Variable      | Default       | Description           |
 |--------------|---------------|-----------------------|
+| `CLOUDORACLE_PROVIDER` | `synthetic` | Cloud provider: `aws`, `gcp`, `azure`, or `synthetic` |
+| `AWS_PROFILE` | `cloudoracle` | AWS shared-config profile to use |
+| `AWS_REGION` | `us-east-2` | AWS region to scan |
+| `GOOGLE_CLOUD_PROJECT` | _(unset)_ | GCP project ID (required when provider is `gcp`) |
+| `AZURE_SUBSCRIPTION_ID` | _(unset)_ | Azure subscription ID (required when provider is `azure`) |
+| `SYNTHETIC_COUNT` | `100` | Default number of synthetic resources to generate |
+| `SYNTHETIC_ACCOUNT` | `synthetic-account` | Default account ID for synthetic data |
+| `CLOUD_SERVICE_TIMEOUT` | `30s` | Per-service timeout for each cloud API call (Go duration string) |
 | `DB_HOST`    | `localhost`   | PostgreSQL host       |
 | `DB_PORT`    | `5432`        | PostgreSQL port       |
 | `DB_USER`    | `oracle`      | Database user         |
 | `DB_PASSWORD`| `oracle_dev`  | Database password     |
 | `DB_NAME`    | `cloudoracle` | Database name         |
 | `LLM_PROVIDER`     | _(auto)_ | Force a specific LLM provider: `gemini`, `claude`, or `openai`. If unset, auto-detects based on which API key is present. |
+| `LLM_TIMEOUT`      | `30s` | HTTP timeout for LLM API calls (Go duration string) |
 | `GEMINI_API_KEY`   | _(unset)_ | API key for Google Gemini (`gemini-2.5-flash`)     |
 | `ANTHROPIC_API_KEY`| _(unset)_ | API key for Anthropic Claude (`claude-haiku-4-5`)  |
 | `OPENAI_API_KEY`   | _(unset)_ | API key for OpenAI (`gpt-4o-mini`)                 |
+| `LOG_LEVEL`        | `info`    | Log level: `debug`, `info`, `warn`, or `error`     |
+| `LOG_FORMAT`       | `text`    | Log format: `text` (human-readable) or `json` (structured)  |
 
 ## How the Analyzer Works
 
@@ -219,7 +401,7 @@ Adding a fourth provider is a matter of creating one new file: implement the two
 
 ## Testing
 
-The project is covered by 91 unit tests across every package — analyzer, generator, LLM providers, PDF report, and database config:
+The project is covered by 103 unit tests across every package — analyzer, generator, LLM providers, PDF report, exporters, cloud mapping, and central config:
 
 - **Per-rule tests**: each detection rule (`ec2-idle`, `rds-oversized`, `ebs-orphan`, `lambda-over-provisioned`) has happy-path, negative, and boundary tests.
 - **Boundary testing**: CPU thresholds, age cutoffs, memory limits, and invocation counts are explicitly tested at their exact values to catch off-by-one errors.
@@ -228,7 +410,10 @@ The project is covered by 91 unit tests across every package — analyzer, gener
 - **Provider factory tests**: auto-detection order (Gemini > Claude > OpenAI), explicit selection, missing keys, and unknown providers.
 - **Prompt builder tests**: total calculations, severity breakdowns, service rollups, top-5 limiting, and empty input handling.
 - **PDF generation tests**: file creation, AI summary inclusion/exclusion, empty findings, 100-finding page-break stress test, invalid paths, and all severity color codes.
+- **Export tests**: JSON round-trip, CSV header + row layout, numeric formatting, RFC 4180 escaping of commas/quotes/newlines, and empty-findings handling for both formats.
 - **Generator tests**: correct count, valid services/regions/types, non-negative costs, timestamp ordering, and service distribution.
+- **Config tests**: default values, custom values, timeout parsing (valid and invalid durations), empty-env fallback, and DSN assembly.
+- **Cloud mapping tests**: AWS SDK type → `shared.Resource` conversion with struct literals (no AWS calls, no credentials needed).
 
 ```bash
 go test ./internal/... -v
@@ -253,6 +438,18 @@ If no API key is set, the report generates without the AI summary section instea
 ### Why synthetic data instead of real AWS integration in v1
 Building the rule engine and report generator against a synthetic data generator allowed iteration without paying for AWS resources, without rate limits, and without coupling the early development to credentials. Real AWS integration is the next milestone, but the abstraction was earned by first solving the harder problem: detecting waste from any data source.
 
+### Why `errgroup` instead of raw goroutines for provider fan-out
+Each real provider issues 4 independent API calls per scan (for example: EC2, RDS, EBS, Lambda on AWS). Running them sequentially meant the total scan time was the sum of the slowest region's latency for every service. Switching to `errgroup.WithContext` + a fixed-size `[][]shared.Resource` result slice (each goroutine owns its own index → no mutex) cut end-to-end scan time roughly in proportion to the number of services per provider. Returning `nil` from each goroutine after logging — instead of propagating errors — preserves the "log one failing service, keep the rest" contract the sequential version had, while giving the rest of the services a genuine chance to finish in parallel.
+
+### Why per-service `context.WithTimeout` rather than a single global deadline
+A scan is only as fast as its slowest cloud API. Giving every service its own deadline (`CLOUD_SERVICE_TIMEOUT`, default 30s) means a misbehaving region bounds only itself — the other services still complete normally. A single global timeout would have cancelled every in-flight service the moment one hung, wasting the progress already made.
+
+### Why `log/slog` over `log.Printf`
+Every warning now carries typed attributes (`provider=aws`, `service=EC2`, `error=...`) instead of being jammed into a free-form sprintf string. That makes logs grep-able, filterable by level, and — with `LOG_FORMAT=json` — ingestion-ready for Loki, ELK, or Cloud Logging without a log parser. `slog` is the standard library's answer to this, landed in Go 1.21, and needs zero external dependencies.
+
+### Why a central `config.Load()` over per-component `os.Getenv`
+Previously every constructor reached into the environment on its own: `NewAWSProvider` for region/profile, `NewGCPProvider` for the project ID, each LLM constructor for its API key, `db.LoadConfigFromEnv` for credentials. That made the contract of each component implicit and the cost of testing high — you had to manipulate real env vars to rearrange behavior. Now `main()` calls `config.Load()` once, and every component receives its typed slice of the config as a parameter. Tests pass struct literals directly.
+
 ## Lessons Learned
 
 Building this project surfaced a subtle but important bug that would have gone unnoticed without testing against real(istic) data:
@@ -261,17 +458,22 @@ Building this project surfaced a subtle but important bug that would have gone u
 
 **Takeaway:** String comparison bugs are among the most common sources of silent failures in cloud tooling. Production systems use canonical enumerations or case-insensitive matching for exactly this reason. Finding this during development -- not after deployment -- is the difference between a tool that works and one that looks like it works.
 
+**The Strategy pattern for cloud providers:** The `CloudProvider` interface started as a formality — there was only the synthetic provider. But when adding real AWS support, the pattern paid for itself: `AWSProvider` and `SyntheticProvider` both satisfy the same interface, `factory.go` picks the right one from an env var, and `main.go` never knows which is active. The key insight was keeping the mapping logic (SDK types -> domain types) as pure functions separated from the API calls. This made it possible to unit test the field mapping with struct literals instead of mocking the entire AWS SDK — a pattern worth repeating for GCP and Azure providers.
+
 ## Roadmap
 
 - [x] LLM-powered analysis: executive summaries generated by Gemini / Claude / OpenAI
 - [x] PDF report generation with executive summary and severity-coded tables
-- [x] Test suite: 91 unit tests across analyzer, generator, LLM providers, PDF, and config
-- [ ] Real AWS integration via SDK (replace synthetic data with live resource inventory)
-- [ ] Multi-cloud support (GCP, Azure)
-- [ ] Cost trend tracking over time
-- [ ] Export findings to JSON/CSV
-- [ ] Slack/email alerting for high-severity findings
-- [ ] Web dashboard with cost visualizations
+- [x] Test suite: 103 unit tests across analyzer, generator, LLM providers, PDF, export, config, and cloud mapping
+- [x] Real AWS integration via SDK (EC2, RDS, EBS, Lambda with STS validation and graceful degradation)
+- [x] Multi-cloud support (GCP, Azure) with Compute, SQL, Disks, and Functions for each provider
+- [x] Cost trend tracking over time (automatic snapshots on seed + `trend` command)
+- [x] Parallel fetch with `errgroup` and per-service `context.WithTimeout`
+- [x] Structured logging with `log/slog` (text or JSON output, level-configurable)
+- [x] Centralized configuration loaded once and injected as typed structs
+- [x] Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
+- [x] Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
+- [ ] SDK-client interfaces for real-provider unit tests (mockable AWS/GCP/Azure clients)
 
 ## License
 

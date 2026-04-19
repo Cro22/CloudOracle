@@ -5,7 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -18,7 +18,7 @@ func InsertResources(ctx context.Context, pool *pgxpool.Pool, resources []shared
 	}
 	defer func() {
 		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			log.Printf("failed to rollback transaction: %v", err)
+			slog.Warn("failed to rollback transaction", "error", err)
 		}
 	}()
 
