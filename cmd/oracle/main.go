@@ -61,7 +61,18 @@ func runSeed(ctx context.Context, pool *db.Pool, args []string) {
 	if err != nil {
 		log.Fatalf("Failed to parse flags: %v", err)
 	}
-	var provider cloud.CloudProvider = cloud.NewSyntheticProvider(*count, *account)
+
+	provider, err := cloud.NewProvider(ctx)
+	if err != nil {
+		log.Fatalf("Failed to create provider: %v", err)
+	}
+
+	if provider.Name() == "synthetic" {
+		provider = cloud.NewSyntheticProvider(*count, *account)
+	} else {
+		log.Printf("Using %s provider — flags --count and --account are ignored (data comes from the real account)", provider.Name())
+	}
+
 	log.Printf("Fetching resources from provider: %s", provider.Name())
 	resources, err := provider.FetchResources(ctx)
 	if err != nil {
@@ -70,7 +81,7 @@ func runSeed(ctx context.Context, pool *db.Pool, args []string) {
 	if err := db.InsertResources(ctx, pool, resources); err != nil {
 		log.Fatalf("Failed to insert resources: %v", err)
 	}
-	log.Printf("Generated %d resources for account %s", len(resources), *account)
+	log.Printf("Inserted %d resources from %s provider", len(resources), provider.Name())
 }
 
 func runList(ctx context.Context, pool *db.Pool) {
