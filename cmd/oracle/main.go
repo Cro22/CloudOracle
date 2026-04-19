@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"sort"
@@ -51,6 +52,8 @@ func main() {
 		runReport(ctx, pool, cfg, os.Args[2:])
 	case "trend":
 		runTrend(ctx, pool, os.Args[2:])
+	case "export":
+		runExport(ctx, pool, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -67,6 +70,7 @@ func printUsage() {
 	fmt.Println("  oracle analyze                           - Run cost optimization rules")
 	fmt.Println("  oracle report [--output file.pdf]        - Generate PDF report")
 	fmt.Println("  oracle trend [--days N]                  - Show cost trends over time")
+	fmt.Println("  oracle export --format=json|csv [--output file] - Export findings to JSON or CSV (stdout by default)")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
@@ -347,4 +351,56 @@ func countUniqueSnapshots(snapshots []db.Snapshot) int {
 		seen[s.TakenAt.Format("2006-01-02 15:04")] = true
 	}
 	return len(seen)
+}
+
+func runExport(ctx context.Context, pool *db.Pool, args []string) {
+	fs := flag.NewFlagSet("export", flag.ExitOnError)
+	format := fs.String("format", "json", "Output format: json or csv")
+	output := fs.String("output", "", "Output file path (default: stdout)")
+	if err := fs.Parse(args); err != nil {
+		slog.Error("failed to parse flags", "error", err)
+		os.Exit(1)
+	}
+
+	resources, err := db.ListResources(ctx, pool)
+	if err != nil {
+		slog.Error("failed to load resources", "error", err)
+		os.Exit(1)
+	}
+
+	findings := analyzer.Analyze(resources)
+
+	writer := io.Writer(os.Stdout)
+	if *output != "" {
+		f, err := os.Create(*output)
+		if err != nil {
+			slog.Error("failed to create output file", "path", *output, "error", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		writer = f
+	}
+
+	switch strings.ToLower(*format) {
+	case "json":
+		err = report.ExportJSON(writer, findings)
+	case "csv":
+		err = report.ExportCSV(writer, findings)
+	default:
+		slog.Error("unknown format (use 'json' or 'csv')", "format", *format)
+		os.Exit(1)
+	}
+
+	if err != nil {
+		slog.Error("failed to export findings", "format", *format, "error", err)
+		os.Exit(1)
+	}
+
+	if *output != "" {
+		slog.Info("exported findings",
+			"count", len(findings),
+			"format", *format,
+			"path", *output,
+		)
+	}
 }
