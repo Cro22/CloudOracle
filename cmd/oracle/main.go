@@ -8,6 +8,7 @@ import (
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/llm"
 	"CloudOracle/internal/logging"
+	"CloudOracle/internal/migrations"
 	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
 	"context"
@@ -41,6 +42,11 @@ func main() {
 		"host", cfg.DB.Host,
 		"database", cfg.DB.Database,
 	)
+
+	if err := migrations.Run(ctx, pool); err != nil {
+		slog.Error("failed to apply migrations", "error", err)
+		os.Exit(1)
+	}
 
 	switch os.Args[1] {
 	case "seed":
