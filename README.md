@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-103%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-143%20passing-brightgreen)
 ![Go Version](https://img.shields.io/badge/go-1.25-blue)
 ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
@@ -55,8 +55,11 @@ internal/
     factory.go              # Provider factory: Config -> concrete provider
     synthetic_provider.go   # Synthetic data provider (dev/demo)
     aws_provider.go         # Real AWS provider — parallel fetchers with per-service timeouts
+    aws_clients.go          # Narrow ec2/rds/lambda interfaces — *aws.Client satisfies them, fakes drive tests
     gcp_provider.go         # Real GCP provider — parallel fetchers with per-service timeouts
+    gcp_clients.go          # Lister interfaces + SDK adapters that flatten pagination
     azure_provider.go       # Real Azure provider — parallel fetchers with per-service timeouts
+    azure_clients.go        # Lister interfaces + SDK adapters that flatten pagers
   generator/
     generator.go            # Synthetic data generation for EC2, RDS, EBS, Lambda
   analyzer/
@@ -89,6 +92,8 @@ The cloud provider layer uses the **Strategy pattern**: `CloudProvider` is the i
 Configuration is loaded once in `main()` via `config.Load()` and injected downward. No component in `cloud/`, `llm/`, or `db/` calls `os.Getenv` directly — every dependency arrives as a typed struct field. This keeps the surface area predictable, makes the code easy to test with struct literals, and means adding a new env var is a single-file change in `internal/config/config.go`.
 
 Each real provider's `FetchResources` fans out its service calls (for example: EC2, RDS, EBS, and Lambda on AWS) onto separate goroutines via `golang.org/x/sync/errgroup`. Each goroutine wraps its API call in `context.WithTimeout(cfg.ServiceTimeout)`, so one slow service can't block the others and a regional outage surfaces as a structured warning rather than a hung process. Per-service failures are logged with `slog` and the successful services still return their resources — the scan degrades gracefully instead of failing hard.
+
+The SDK call surface for every real provider is hidden behind narrow interfaces (`ec2APIClient`, `gcpInstancesLister`, `azureVMLister`, …) defined in `aws_clients.go` / `gcp_clients.go` / `azure_clients.go`. Concrete `*ec2.Client`, `*compute.InstancesClient`, and `*armcompute.VirtualMachinesClient` values satisfy those interfaces transparently, so production code is unchanged — but unit tests can plug in fakes that return canned slices and simulate API errors without ever touching the network or needing credentials. The mapping logic (`SDK type -> shared.Resource`) stays inline with the fetcher, which means tests can exercise pagination, error handling, graceful degradation, and edge-case field handling end-to-end.
 
 ## Tech Stack
 
@@ -496,7 +501,7 @@ Adding a fourth provider is a matter of creating one new file: implement the two
 
 ## Testing
 
-The project is covered by 103 unit tests across every package — analyzer, generator, LLM providers, PDF report, exporters, cloud mapping, and central config:
+The project is covered by 143 unit tests across every package — analyzer, generator, LLM providers, PDF report, exporters, cloud mapping, real-provider fetchers, and central config:
 
 - **Per-rule tests**: each detection rule (`ec2-idle`, `rds-oversized`, `ebs-orphan`, `lambda-over-provisioned`) has happy-path, negative, and boundary tests.
 - **Boundary testing**: CPU thresholds, age cutoffs, memory limits, and invocation counts are explicitly tested at their exact values to catch off-by-one errors.
@@ -509,6 +514,7 @@ The project is covered by 103 unit tests across every package — analyzer, gene
 - **Generator tests**: correct count, valid services/regions/types, non-negative costs, timestamp ordering, and service distribution.
 - **Config tests**: default values, custom values, timeout parsing (valid and invalid durations), empty-env fallback, and DSN assembly.
 - **Cloud mapping tests**: AWS SDK type → `shared.Resource` conversion with struct literals (no AWS calls, no credentials needed).
+- **Real-provider fetcher tests**: every cloud provider (AWS, GCP, Azure) is exercised end-to-end against fake SDK clients — pagination exhaustion, per-service API errors, graceful degradation when one service fails, and edge cases (nil hardware profile on Azure VMs, nil settings on Cloud SQL, web apps mixed with function apps in the Azure `/sites` collection).
 
 ```bash
 go test ./internal/... -v
@@ -585,7 +591,7 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [x] Centralized configuration loaded once and injected as typed structs
 - [x] Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
 - [x] Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
-- [ ] SDK-client interfaces for real-provider unit tests (mockable AWS/GCP/Azure clients)
+- [x] SDK-client interfaces for real-provider unit tests — every provider fetcher (AWS / GCP / Azure) is exercised against fake SDK clients, covering pagination, per-service errors, and graceful degradation
 
 ## License
 

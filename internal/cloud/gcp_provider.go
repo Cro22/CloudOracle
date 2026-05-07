@@ -10,21 +10,18 @@ import (
 	"time"
 
 	compute "cloud.google.com/go/compute/apiv1"
-	computepb "cloud.google.com/go/compute/apiv1/computepb"
 	functions "cloud.google.com/go/functions/apiv2"
-	functionspb "cloud.google.com/go/functions/apiv2/functionspb"
 	"golang.org/x/sync/errgroup"
-	"google.golang.org/api/iterator"
 	sqladmin "google.golang.org/api/sqladmin/v1beta4"
 )
 
 type GCPProvider struct {
-	instancesClient *compute.InstancesClient
-	disksClient     *compute.DisksClient
-	sqlService      *sqladmin.Service
-	functionsClient *functions.FunctionClient
-	projectID       string
-	serviceTimeout  time.Duration
+	instances      gcpInstancesLister
+	disks          gcpDisksLister
+	sql            gcpSQLLister
+	functions      gcpFunctionsLister
+	projectID      string
+	serviceTimeout time.Duration
 }
 
 func NewGCPProvider(ctx context.Context, cfg config.Config) (*GCPProvider, error) {
@@ -54,12 +51,12 @@ func NewGCPProvider(ctx context.Context, cfg config.Config) (*GCPProvider, error
 	}
 
 	return &GCPProvider{
-		instancesClient: instancesClient,
-		disksClient:     disksClient,
-		sqlService:      sqlService,
-		functionsClient: functionsClient,
-		projectID:       projectID,
-		serviceTimeout:  cfg.ServiceTimeout,
+		instances:      &realGCPInstancesLister{client: instancesClient, projectID: projectID},
+		disks:          &realGCPDisksLister{client: disksClient, projectID: projectID},
+		sql:            &realGCPSQLLister{service: sqlService, projectID: projectID},
+		functions:      &realGCPFunctionsLister{client: functionsClient, projectID: projectID},
+		projectID:      projectID,
+		serviceTimeout: cfg.ServiceTimeout,
 	}, nil
 }
 
@@ -111,175 +108,106 @@ func (p *GCPProvider) FetchResources(ctx context.Context) ([]shared.Resource, er
 }
 
 func (p *GCPProvider) fetchComputeInstances(ctx context.Context) ([]shared.Resource, error) {
-	req := &computepb.AggregatedListInstancesRequest{
-		Project: p.projectID,
-		Filter:  strPtr("status=RUNNING"),
+	instances, err := p.instances.listInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing Compute Engine instances: %w", err)
 	}
 
 	var resources []shared.Resource
-	it := p.instancesClient.AggregatedList(ctx, req)
-
-	for {
-		pair, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("listing Compute Engine instances: %w", err)
+	for _, instance := range instances {
+		zone := extractLastSegment(instance.GetZone())
+		labels := instance.GetLabels()
+		if len(labels) == 0 {
+			labels = nil
 		}
 
-		if pair.Value == nil {
-			continue
-		}
-
-		for _, instance := range pair.Value.GetInstances() {
-			zone := extractLastSegment(instance.GetZone())
-			region := extractRegionFromZone(zone)
-			createdAt := parseGCPTimestamp(instance.GetCreationTimestamp())
-
-			labels := instance.GetLabels()
-			if len(labels) == 0 {
-				labels = nil
-			}
-
-			resources = append(resources, shared.Resource{
-				ID:           instance.GetName(),
-				AccountID:    p.projectID,
-				Service:      "compute",
-				ResourceType: extractLastSegment(instance.GetMachineType()),
-				Region:       region,
-				MonthlyCost:  0.0,
-				UsageMetric:  0.0,
-				Tags:         labels,
-				CreatedAt:    createdAt,
-				UpdatedAt:    time.Now(),
-			})
-		}
+		resources = append(resources, shared.Resource{
+			ID:           instance.GetName(),
+			AccountID:    p.projectID,
+			Service:      "compute",
+			ResourceType: extractLastSegment(instance.GetMachineType()),
+			Region:       extractRegionFromZone(zone),
+			MonthlyCost:  0.0,
+			UsageMetric:  0.0,
+			Tags:         labels,
+			CreatedAt:    parseGCPTimestamp(instance.GetCreationTimestamp()),
+			UpdatedAt:    time.Now(),
+		})
 	}
-
 	return resources, nil
 }
 
 func (p *GCPProvider) fetchCloudSQLInstances(ctx context.Context) ([]shared.Resource, error) {
-	var resources []shared.Resource
-	pageToken := ""
-
-	for {
-		call := p.sqlService.Instances.List(p.projectID).Context(ctx)
-		if pageToken != "" {
-			call = call.PageToken(pageToken)
-		}
-
-		resp, err := call.Do()
-		if err != nil {
-			return nil, fmt.Errorf("listing Cloud SQL instances: %w", err)
-		}
-
-		for _, db := range resp.Items {
-			createdAt := parseGCPTimestamp(db.CreateTime)
-
-			var tags map[string]string
-			if db.Settings != nil && len(db.Settings.UserLabels) > 0 {
-				tags = db.Settings.UserLabels
-			}
-
-			tier := ""
-			if db.Settings != nil {
-				tier = db.Settings.Tier
-			}
-
-			resources = append(resources, shared.Resource{
-				ID:           db.Name,
-				AccountID:    p.projectID,
-				Service:      "cloudsql",
-				ResourceType: tier,
-				Region:       db.Region,
-				MonthlyCost:  0.0,
-				UsageMetric:  0.0,
-				Tags:         tags,
-				CreatedAt:    createdAt,
-				UpdatedAt:    time.Now(),
-			})
-		}
-
-		if resp.NextPageToken == "" {
-			break
-		}
-		pageToken = resp.NextPageToken
+	dbs, err := p.sql.listSQLInstances(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing Cloud SQL instances: %w", err)
 	}
 
+	var resources []shared.Resource
+	for _, db := range dbs {
+		var tags map[string]string
+		tier := ""
+		if db.Settings != nil {
+			tier = db.Settings.Tier
+			if len(db.Settings.UserLabels) > 0 {
+				tags = db.Settings.UserLabels
+			}
+		}
+
+		resources = append(resources, shared.Resource{
+			ID:           db.Name,
+			AccountID:    p.projectID,
+			Service:      "cloudsql",
+			ResourceType: tier,
+			Region:       db.Region,
+			MonthlyCost:  0.0,
+			UsageMetric:  0.0,
+			Tags:         tags,
+			CreatedAt:    parseGCPTimestamp(db.CreateTime),
+			UpdatedAt:    time.Now(),
+		})
+	}
 	return resources, nil
 }
 
 func (p *GCPProvider) fetchPersistentDisks(ctx context.Context) ([]shared.Resource, error) {
-	req := &computepb.AggregatedListDisksRequest{
-		Project: p.projectID,
+	disks, err := p.disks.listDisks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing Persistent Disks: %w", err)
 	}
 
 	var resources []shared.Resource
-	it := p.disksClient.AggregatedList(ctx, req)
-
-	for {
-		pair, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("listing Persistent Disks: %w", err)
+	for _, disk := range disks {
+		zone := extractLastSegment(disk.GetZone())
+		labels := disk.GetLabels()
+		if len(labels) == 0 {
+			labels = nil
 		}
 
-		if pair.Value == nil {
-			continue
-		}
-
-		for _, disk := range pair.Value.GetDisks() {
-			zone := extractLastSegment(disk.GetZone())
-			region := extractRegionFromZone(zone)
-			createdAt := parseGCPTimestamp(disk.GetCreationTimestamp())
-
-			labels := disk.GetLabels()
-			if len(labels) == 0 {
-				labels = nil
-			}
-
-			resources = append(resources, shared.Resource{
-				ID:           disk.GetName(),
-				AccountID:    p.projectID,
-				Service:      "persistent-disk",
-				ResourceType: extractLastSegment(disk.GetType()),
-				Region:       region,
-				MonthlyCost:  0.0,
-				UsageMetric:  0.0,
-				Tags:         labels,
-				CreatedAt:    createdAt,
-				UpdatedAt:    time.Now(),
-			})
-		}
+		resources = append(resources, shared.Resource{
+			ID:           disk.GetName(),
+			AccountID:    p.projectID,
+			Service:      "persistent-disk",
+			ResourceType: extractLastSegment(disk.GetType()),
+			Region:       extractRegionFromZone(zone),
+			MonthlyCost:  0.0,
+			UsageMetric:  0.0,
+			Tags:         labels,
+			CreatedAt:    parseGCPTimestamp(disk.GetCreationTimestamp()),
+			UpdatedAt:    time.Now(),
+		})
 	}
-
 	return resources, nil
 }
 
 func (p *GCPProvider) fetchCloudFunctions(ctx context.Context) ([]shared.Resource, error) {
-	req := &functionspb.ListFunctionsRequest{
-		Parent: fmt.Sprintf("projects/%s/locations/-", p.projectID),
+	fns, err := p.functions.listFunctions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("listing Cloud Functions: %w", err)
 	}
 
 	var resources []shared.Resource
-	it := p.functionsClient.ListFunctions(ctx, req)
-
-	for {
-		fn, err := it.Next()
-		if err == iterator.Done {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("listing Cloud Functions: %w", err)
-		}
-
-		name := extractLastSegment(fn.GetName())
-		region := extractFromResourceName(fn.GetName(), "locations")
-
+	for _, fn := range fns {
 		runtime := ""
 		if fn.GetBuildConfig() != nil {
 			runtime = fn.GetBuildConfig().GetRuntime()
@@ -298,11 +226,11 @@ func (p *GCPProvider) fetchCloudFunctions(ctx context.Context) ([]shared.Resourc
 		}
 
 		resources = append(resources, shared.Resource{
-			ID:           name,
+			ID:           extractLastSegment(fn.GetName()),
 			AccountID:    p.projectID,
 			Service:      "functions",
 			ResourceType: runtime,
-			Region:       region,
+			Region:       extractFromResourceName(fn.GetName(), "locations"),
 			MonthlyCost:  0.0,
 			UsageMetric:  0.0,
 			Tags:         labels,
@@ -310,7 +238,6 @@ func (p *GCPProvider) fetchCloudFunctions(ctx context.Context) ([]shared.Resourc
 			UpdatedAt:    time.Now(),
 		})
 	}
-
 	return resources, nil
 }
 

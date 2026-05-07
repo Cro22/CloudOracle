@@ -19,10 +19,9 @@ import (
 )
 
 type AWSProvider struct {
-	ec2Client      *ec2.Client
-	rdsClient      *rds.Client
-	lambdaClient   *lambda.Client
-	stsClient      *sts.Client
+	ec2Client      ec2APIClient
+	rdsClient      rdsAPIClient
+	lambdaClient   lambdaAPIClient
 	accountID      string
 	region         string
 	serviceTimeout time.Duration
@@ -42,10 +41,6 @@ func NewAWSProvider(ctx context.Context, cfg config.Config) (*AWSProvider, error
 	}
 
 	stsClient := sts.NewFromConfig(awsCfg)
-	ec2Client := ec2.NewFromConfig(awsCfg)
-	rdsClient := rds.NewFromConfig(awsCfg)
-	lambdaClient := lambda.NewFromConfig(awsCfg)
-
 	identity, err := stsClient.GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
 		return nil, fmt.Errorf("validating AWS credentials via STS (profile=%s): %w",
@@ -53,10 +48,9 @@ func NewAWSProvider(ctx context.Context, cfg config.Config) (*AWSProvider, error
 	}
 
 	return &AWSProvider{
-		ec2Client:      ec2Client,
-		rdsClient:      rdsClient,
-		lambdaClient:   lambdaClient,
-		stsClient:      stsClient,
+		ec2Client:      ec2.NewFromConfig(awsCfg),
+		rdsClient:      rds.NewFromConfig(awsCfg),
+		lambdaClient:   lambda.NewFromConfig(awsCfg),
 		accountID:      *identity.Account,
 		region:         region,
 		serviceTimeout: cfg.ServiceTimeout,
