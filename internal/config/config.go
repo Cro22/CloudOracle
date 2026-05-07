@@ -42,6 +42,9 @@ type LLMConfig struct {
 	ClaudeAPIKey   string
 	OpenAIAPIKey   string
 	RequestTimeout time.Duration
+	MaxRetries     int
+	BaseDelay      time.Duration
+	MaxDelay       time.Duration
 }
 
 const (
@@ -107,6 +110,9 @@ func Load() (Config, error) {
 			ClaudeAPIKey:   os.Getenv("ANTHROPIC_API_KEY"),
 			OpenAIAPIKey:   os.Getenv("OPENAI_API_KEY"),
 			RequestTimeout: v.requirePositiveDuration("LLM_TIMEOUT", 30*time.Second),
+			MaxRetries:     v.requireNonNegativeInt("LLM_MAX_RETRIES", 3),
+			BaseDelay:      v.requirePositiveDuration("LLM_BASE_DELAY", 500*time.Millisecond),
+			MaxDelay:       v.requirePositiveDuration("LLM_MAX_DELAY", 30*time.Second),
 		},
 		ServiceTimeout: v.requirePositiveDuration("CLOUD_SERVICE_TIMEOUT", 30*time.Second),
 		LogLevel:       v.requireEnum("LOG_LEVEL", "info", validLogLevels),
@@ -202,6 +208,25 @@ func (v *validator) requirePositiveInt(key string, def int) int {
 	}
 	if n < 1 {
 		v.errorf("%s=%d must be >= 1", key, n)
+		return def
+	}
+	return n
+}
+
+// requireNonNegativeInt is the >= 0 sibling of requirePositiveInt — used for
+// values like LLM_MAX_RETRIES where 0 is a legal "disable" setting.
+func (v *validator) requireNonNegativeInt(key string, def int) int {
+	raw, set := os.LookupEnv(key)
+	if !set || raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		v.errorf("%s=%q is not a valid integer", key, raw)
+		return def
+	}
+	if n < 0 {
+		v.errorf("%s=%d must be >= 0", key, n)
 		return def
 	}
 	return n

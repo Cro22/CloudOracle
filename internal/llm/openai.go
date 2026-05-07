@@ -26,7 +26,7 @@ func newOpenAI(cfg config.LLMConfig) (*OpenAPIProvider, error) {
 	return &OpenAPIProvider{
 		apiKey: cfg.OpenAIAPIKey,
 		model:  "gpt-4o-mini",
-		client: &http.Client{Timeout: cfg.RequestTimeout},
+		client: newHTTPClient(cfg),
 	}, nil
 }
 

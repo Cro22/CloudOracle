@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-143%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-171%20passing-brightgreen)
 ![Go Version](https://img.shields.io/badge/go-1.25-blue)
 ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
@@ -30,6 +30,7 @@ Unlike policy engines like **Cloud Custodian** that focus on automated enforceme
 - **Service summary** - Aggregated view of findings and potential savings per AWS service
 - **PDF report generation** - Professional executive-style PDF reports with severity-coded tables, recommended actions, and annual savings projections
 - **LLM-powered executive summaries** - Pluggable provider layer (Gemini, Claude, OpenAI) that turns raw findings into a CTO/CFO-ready narrative embedded directly into the PDF report
+- **Resilient LLM calls** - Shared `http.RoundTripper` retries 429s, 5xx, and network errors with exponential-backoff-with-full-jitter; honors the `Retry-After` header from Anthropic/OpenAI; cancellable via the request context
 - **Cost trend tracking** - Automatic cost snapshots on every seed, with a `trend` command that shows per-service cost changes over time with directional arrows and percentage deltas
 - **Parallel resource fetching** - Each provider fans out service calls (Compute / SQL / Disks / Functions) concurrently with `errgroup`, cutting scan time on accounts with many services
 - **Per-service timeouts** - Every API call to a cloud service is wrapped in `context.WithTimeout` so a single slow region can't stall the entire scan
@@ -71,6 +72,8 @@ internal/
   llm/
     provider.go             # Provider interface + Config-driven factory (Gemini / Claude / OpenAI)
     prompt.go               # Shared prompt builder (findings -> structured analysis)
+    http.go                 # newHTTPClient: builds the *http.Client every provider uses
+    retry.go                # http.RoundTripper that retries 429/5xx/net errors with full-jitter backoff
     gemini.go               # Google Gemini client (gemini-2.5-flash)
     claude.go               # Anthropic Claude client (claude-haiku-4-5)
     openai.go               # OpenAI client (gpt-4o-mini)
@@ -458,6 +461,9 @@ Same caveat as GCP: no live-account run has been done, so treat first execution 
 | `DB_NAME`    | `cloudoracle` | Database name         |
 | `LLM_PROVIDER`     | _(auto)_ | Force a specific LLM provider: `gemini`, `claude`, or `openai`. If unset, auto-detects based on which API key is present. |
 | `LLM_TIMEOUT`      | `30s` | HTTP timeout for LLM API calls (Go duration string) |
+| `LLM_MAX_RETRIES`  | `3` | Number of retries on transient LLM failures (429, 5xx, network errors). Set to `0` to disable. |
+| `LLM_BASE_DELAY`   | `500ms` | Initial backoff between retries; doubles on each attempt with full jitter |
+| `LLM_MAX_DELAY`    | `30s` | Cap for the per-retry wait (also caps `Retry-After` headers) |
 | `GEMINI_API_KEY`   | _(unset)_ | API key for Google Gemini (`gemini-2.5-flash`)     |
 | `ANTHROPIC_API_KEY`| _(unset)_ | API key for Anthropic Claude (`claude-haiku-4-5`)  |
 | `OPENAI_API_KEY`   | _(unset)_ | API key for OpenAI (`gpt-4o-mini`)                 |
@@ -501,7 +507,7 @@ Adding a fourth provider is a matter of creating one new file: implement the two
 
 ## Testing
 
-The project is covered by 143 unit tests across every package — analyzer, generator, LLM providers, PDF report, exporters, cloud mapping, real-provider fetchers, and central config:
+The project is covered by 171 unit tests across every package — analyzer, generator, LLM providers, LLM HTTP retries, PDF report, exporters, cloud mapping, real-provider fetchers, and central config validation:
 
 - **Per-rule tests**: each detection rule (`ec2-idle`, `rds-oversized`, `ebs-orphan`, `lambda-over-provisioned`) has happy-path, negative, and boundary tests.
 - **Boundary testing**: CPU thresholds, age cutoffs, memory limits, and invocation counts are explicitly tested at their exact values to catch off-by-one errors.
@@ -515,6 +521,8 @@ The project is covered by 143 unit tests across every package — analyzer, gene
 - **Config tests**: default values, custom values, timeout parsing (valid and invalid durations), empty-env fallback, and DSN assembly.
 - **Cloud mapping tests**: AWS SDK type → `shared.Resource` conversion with struct literals (no AWS calls, no credentials needed).
 - **Real-provider fetcher tests**: every cloud provider (AWS, GCP, Azure) is exercised end-to-end against fake SDK clients — pagination exhaustion, per-service API errors, graceful degradation when one service fails, and edge cases (nil hardware profile on Azure VMs, nil settings on Cloud SQL, web apps mixed with function apps in the Azure `/sites` collection).
+- **LLM retry tests**: the shared retry transport is verified against `httptest` servers — retries until success, respects `MaxRetries` cap, honors `Retry-After` headers, replays the request body on every attempt, retries transport-level errors (not just non-2xx), bails out on context cancellation, and returns immediately on non-retryable statuses (401, 4xx other than 408/429).
+- **Config validation tests**: every invalid input shape (non-numeric port, out-of-range port, unknown enum value, negative integer, malformed Go duration, zero/negative duration), every cross-field rule (provider=gcp without project, provider=azure without subscription, LLM_PROVIDER set without matching API key), and the multi-error accumulator that lists all problems at once instead of failing on the first.
 
 ```bash
 go test ./internal/... -v
@@ -534,6 +542,11 @@ The tools are complementary: Custodian is *what to enforce*, CloudOracle is *why
 
 ### Why interfaces over inheritance for LLM providers
 The `Provider` interface in `internal/llm` is intentionally minimal — just `GenerateSummary` and `Name`. Each provider (Gemini, Claude, OpenAI) is a fully independent implementation. Adding a fourth provider requires zero changes to existing code: write a new file, register it in `provider.go`, done. This is Go's structural typing at its best — no inheritance, no abstract base classes, no framework lock-in.
+
+### Why retries live in a `RoundTripper` rather than around each `client.Do`
+Every LLM provider eventually hits a 429 or a 5xx — Anthropic and OpenAI both rate-limit aggressively and both send `Retry-After` headers. Putting the retry loop inside the transport (`internal/llm/retry.go`) means **every** code path that issues an HTTP request gets retries automatically: the three providers today, and whatever future request paths we add (token-counting endpoints, streaming, file uploads). The alternative — wrapping each `client.Do` call — is more obvious but every new call site has to remember to wrap, and tests have to mock the wrapper.
+
+The transport buffers the request body once on entry and replays it via `req.Body` + `req.GetBody` on every attempt. It's safe because LLM POST bodies are tiny (a JSON prompt). It honors `Retry-After` (delta-seconds and HTTP-date forms) before falling back to exponential backoff with full jitter — full jitter (random in `[0, baseDelay * 2^attempt]`) is the AWS-recommended algorithm for distributed clients hitting the same endpoint, because it spreads retries evenly instead of producing thundering herds. Backoff waits respect the request context, so cancellation propagates cleanly mid-retry.
 
 ### Why net/http directly instead of vendor SDKs
 All three LLM providers are implemented with the standard library `net/http` package, no vendor SDKs. This keeps the dependency tree small (the entire project has fewer than 10 direct dependencies), makes the code portable, and forces explicit handling of errors, timeouts, and retries — all of which are usually hidden behind SDK abstractions.
