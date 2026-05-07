@@ -28,7 +28,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	cfg := config.Load()
+	// Config first, before logging or anything else: if env vars are wrong
+	// we want to surface every problem at once and exit cleanly. slog isn't
+	// set up yet, so we go to stderr directly.
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
 	logging.Setup(cfg.LogLevel, cfg.LogFormat)
 
 	ctx := context.Background()
