@@ -1,6 +1,7 @@
 package aws
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -164,6 +165,71 @@ func TestGetNestedFirst(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "want object") {
 			t.Errorf("error should say 'want object': %v", err)
+		}
+	})
+}
+
+func TestGetStringList(t *testing.T) {
+	t.Run("multi element", func(t *testing.T) {
+		attrs := map[string]interface{}{
+			"k": []interface{}{"a", "b", "c"},
+		}
+		got, pres, err := getStringList(attrs, "k")
+		if err != nil || !pres {
+			t.Fatalf("err=%v pres=%v", err, pres)
+		}
+		if !reflect.DeepEqual(got, []string{"a", "b", "c"}) {
+			t.Errorf("got %v", got)
+		}
+	})
+
+	t.Run("single element", func(t *testing.T) {
+		attrs := map[string]interface{}{"k": []interface{}{"only"}}
+		got, _, err := getStringList(attrs, "k")
+		if err != nil || len(got) != 1 || got[0] != "only" {
+			t.Errorf("got=%v err=%v", got, err)
+		}
+	})
+
+	t.Run("missing", func(t *testing.T) {
+		_, pres, err := getStringList(map[string]interface{}{}, "k")
+		if err != nil || pres {
+			t.Errorf("err=%v pres=%v", err, pres)
+		}
+	})
+
+	t.Run("null value", func(t *testing.T) {
+		_, pres, err := getStringList(map[string]interface{}{"k": nil}, "k")
+		if err != nil || pres {
+			t.Errorf("err=%v pres=%v", err, pres)
+		}
+	})
+
+	t.Run("empty list reported as not present", func(t *testing.T) {
+		_, pres, err := getStringList(map[string]interface{}{"k": []interface{}{}}, "k")
+		if err != nil || pres {
+			t.Errorf("err=%v pres=%v, want nil/false for empty list", err, pres)
+		}
+	})
+
+	t.Run("not a list", func(t *testing.T) {
+		_, _, err := getStringList(map[string]interface{}{"k": "string-value"}, "k")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "want list") {
+			t.Errorf("error should say 'want list': %v", err)
+		}
+	})
+
+	t.Run("non-string element", func(t *testing.T) {
+		attrs := map[string]interface{}{"k": []interface{}{"ok", 42}}
+		_, _, err := getStringList(attrs, "k")
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), `"k"[1]`) {
+			t.Errorf("error should reference index 1: %v", err)
 		}
 	})
 }
