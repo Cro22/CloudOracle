@@ -26,7 +26,7 @@ func newGemini(cfg config.LLMConfig) (*GeminiProvider, error) {
 	return &GeminiProvider{
 		apiKey: cfg.GeminiAPIKey,
 		model:  "gemini-2.5-flash",
-		client: &http.Client{Timeout: cfg.RequestTimeout},
+		client: newHTTPClient(cfg),
 	}, nil
 }
 

@@ -25,7 +25,7 @@ func newClaude(cfg config.LLMConfig) (*ClaudeProvider, error) {
 	return &ClaudeProvider{
 		apiKey: cfg.ClaudeAPIKey,
 		model:  "claude-haiku-4-5",
-		client: &http.Client{Timeout: cfg.RequestTimeout},
+		client: newHTTPClient(cfg),
 	}, nil
 }
 

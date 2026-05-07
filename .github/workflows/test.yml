@@ -1,0 +1,33 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: go vet ./...
+      - run: go test -race ./internal/...
+
+  integration:
+    name: Integration tests (testcontainers)
+    runs-on: ubuntu-latest
+    # Docker is preinstalled on ubuntu-latest runners, so testcontainers-go
+    # works out of the box without a docker:// service container.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+      - run: go test -tags=integration -timeout=10m ./internal/db/ ./internal/e2e/
