@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-171%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-171%20unit%20%2B%2012%20integration-brightgreen)
 ![Go Version](https://img.shields.io/badge/go-1.25-blue)
 ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
@@ -82,6 +82,10 @@ internal/
     insert.go               # Transactional insert + query logic
     snapshots.go            # Cost snapshot creation + trend queries
     trends.go               # Aggregated trends for the /api/trends endpoint
+    dbtest/postgres.go      # testcontainers-go helper (gated by `integration` build tag)
+    *_integration_test.go   # //go:build integration — real Postgres tests
+  e2e/
+    seed_analyze_test.go    # //go:build integration — full seed -> analyze flow
   migrations/
     migrations.go           # go:embed runner executed at app startup
     001_create_resources.sql
@@ -507,7 +511,16 @@ Adding a fourth provider is a matter of creating one new file: implement the two
 
 ## Testing
 
-The project is covered by 171 unit tests across every package — analyzer, generator, LLM providers, LLM HTTP retries, PDF report, exporters, cloud mapping, real-provider fetchers, and central config validation:
+The project has two tiers of tests:
+
+- **Unit tests** (171, no external dependencies): pure-function tests for the analyzer, generator, LLM providers, LLM retries, PDF report, exporters, cloud mapping, real-provider fetchers, and central config validation. Run with `go test ./internal/...`.
+- **Integration tests** (12, require Docker): exercise the real Postgres path via [testcontainers-go](https://golang.testcontainers.org/) — insert/upsert behavior, transaction rollback, snapshot aggregation, and a full end-to-end seed → analyze flow against a containerized Postgres 16. Run with `go test -tags=integration ./internal/db/ ./internal/e2e/`.
+
+Integration tests share a single Postgres container per process and `TRUNCATE … RESTART IDENTITY CASCADE` between cases — fast (sub-millisecond reset on small tables) and hermetic enough for our schema. The helper lives at `internal/db/dbtest/postgres.go` and is gated by the `integration` build tag, so the testcontainers dependency stays out of the unit-test compile path. If Docker isn't running, the helper calls `t.Skip` with a clear message rather than failing — running the binary without Docker just skips the integration cases.
+
+The CI workflow at `.github/workflows/test.yml` runs both tiers on every push and PR. GitHub-hosted Ubuntu runners have Docker preinstalled, so the integration job needs no extra service container.
+
+The unit tests cover:
 
 - **Per-rule tests**: each detection rule (`ec2-idle`, `rds-oversized`, `ebs-orphan`, `lambda-over-provisioned`) has happy-path, negative, and boundary tests.
 - **Boundary testing**: CPU thresholds, age cutoffs, memory limits, and invocation counts are explicitly tested at their exact values to catch off-by-one errors.
@@ -524,8 +537,25 @@ The project is covered by 171 unit tests across every package — analyzer, gene
 - **LLM retry tests**: the shared retry transport is verified against `httptest` servers — retries until success, respects `MaxRetries` cap, honors `Retry-After` headers, replays the request body on every attempt, retries transport-level errors (not just non-2xx), bails out on context cancellation, and returns immediately on non-retryable statuses (401, 4xx other than 408/429).
 - **Config validation tests**: every invalid input shape (non-numeric port, out-of-range port, unknown enum value, negative integer, malformed Go duration, zero/negative duration), every cross-field rule (provider=gcp without project, provider=azure without subscription, LLM_PROVIDER set without matching API key), and the multi-error accumulator that lists all problems at once instead of failing on the first.
 
+The integration tests cover:
+
+- **Insert + upsert**: round-trip through a real Postgres, asserting that `ON CONFLICT DO UPDATE` updates the right columns (`monthly_cost`, `usage_metric`, `updated_at`) without overwriting `created_at`.
+- **Transaction rollback**: a failing batch (one row that overflows `NUMERIC(10,2)`) rolls back the whole batch, leaving pre-existing rows untouched.
+- **Snapshot aggregation**: a mixed set of resources across multiple `(account, service)` tuples produces exactly the expected snapshot rows, with correct counts and per-tuple cost totals.
+- **Snapshot windowing**: the `--days` filter on the `trend` command actually filters via SQL — old snapshots are excluded from short windows and included in long ones.
+- **End-to-end seed → analyze**: a deterministic resource set engineered to fire each rule once, inserted via `InsertResources`, read back via `ListResources`, and analyzed — asserts every rule fires exactly once and findings are sorted by potential savings descending.
+- **End-to-end with synthetic data**: 50 random resources generated by `SyntheticProvider`, full round-trip through the DB, analyzer must produce *some* findings (the generator skews toward waste patterns).
+- **Re-seed idempotency**: running insert three times on the same fixed-ID set ends with the same row count — proves the seed flow is safe to re-run on a schedule.
+
 ```bash
-go test ./internal/... -v
+# Unit tests (no Docker required)
+go test ./internal/...
+
+# Integration tests (Docker must be running)
+go test -tags=integration ./internal/db/ ./internal/e2e/
+
+# Both, verbose
+go test -tags=integration -v ./internal/...
 ```
 
 All rules are pure functions (`Resource -> *Finding`), which makes them trivially testable without mocks, fixtures, or test databases. The code was designed to be testable from the start — not tested after the fact.
@@ -542,6 +572,11 @@ The tools are complementary: Custodian is *what to enforce*, CloudOracle is *why
 
 ### Why interfaces over inheritance for LLM providers
 The `Provider` interface in `internal/llm` is intentionally minimal — just `GenerateSummary` and `Name`. Each provider (Gemini, Claude, OpenAI) is a fully independent implementation. Adding a fourth provider requires zero changes to existing code: write a new file, register it in `provider.go`, done. This is Go's structural typing at its best — no inheritance, no abstract base classes, no framework lock-in.
+
+### Why a shared Postgres container with TRUNCATE rather than a container per test
+The integration helper at `internal/db/dbtest/postgres.go` boots one Postgres 16 container per test process and resets the schema with `TRUNCATE … RESTART IDENTITY CASCADE` between tests. The alternative — a fresh container per test — gives stronger isolation but pays ~3-5s of container-startup cost per case, which adds up fast as the suite grows. TRUNCATE on small tables runs in sub-millisecond, and all our tables are independent (no triggers, no shared sequences spanning tests), so the isolation guarantee is the same in practice. The whole integration suite (12 tests) runs in ~5 seconds total instead of ~60.
+
+If we ever add tests that need different schemas or different Postgres versions, we'd opt back into a per-test container for those specific cases — but as a default, sharing wins on speed.
 
 ### Why retries live in a `RoundTripper` rather than around each `client.Do`
 Every LLM provider eventually hits a 429 or a 5xx — Anthropic and OpenAI both rate-limit aggressively and both send `Retry-After` headers. Putting the retry loop inside the transport (`internal/llm/retry.go`) means **every** code path that issues an HTTP request gets retries automatically: the three providers today, and whatever future request paths we add (token-counting endpoints, streaming, file uploads). The alternative — wrapping each `client.Do` call — is more obvious but every new call site has to remember to wrap, and tests have to mock the wrapper.
@@ -605,6 +640,9 @@ Building this project surfaced a subtle but important bug that would have gone u
 - [x] Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
 - [x] Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
 - [x] SDK-client interfaces for real-provider unit tests — every provider fetcher (AWS / GCP / Azure) is exercised against fake SDK clients, covering pagination, per-service errors, and graceful degradation
+- [x] Fail-fast configuration validation — `config.Load() (Config, error)` accumulates every invalid env var into a single readable error, with cross-field rules (provider=gcp without `GOOGLE_CLOUD_PROJECT`, `LLM_PROVIDER=claude` without `ANTHROPIC_API_KEY`, etc.)
+- [x] Resilient LLM HTTP layer — shared `RoundTripper` retries 429/5xx/network errors with exponential-backoff-with-full-jitter, honors `Retry-After`, replays request bodies, cancellable via context
+- [x] testcontainers-based integration tests — real Postgres 16 in Docker via `testcontainers-go`, gated by `//go:build integration`, with a full seed → analyze E2E test and a GitHub Actions workflow that runs both unit and integration tiers
 
 ## License
 
