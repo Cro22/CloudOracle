@@ -1,0 +1,24 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.6.0",
+  "resource_changes": [
+    {
+      "address": "aws_instance.legacy",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {
+          "instance_type": "t3.medium",
+          "ami": "ami-0000000000000aaaa"
+        },
+        "after": {
+          "instance_type": "m5.xlarge",
+          "ami": "ami-1111111111111bbbb"
+        }
+      }
+    }
+  ]
+}
