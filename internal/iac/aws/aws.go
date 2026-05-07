@@ -24,10 +24,13 @@ package aws
 //     consumer to add a case (or explicitly default), instead of silently
 //     dispatching a runtime type assertion that no-ops on the new type.
 type ResourceAttributes struct {
-	Type string
-	EC2  *EC2Attributes
-	RDS  *RDSAttributes
-	EBS  *EBSAttributes
+	Type               string
+	EC2                *EC2Attributes
+	RDS                *RDSAttributes
+	EBS                *EBSAttributes
+	Lambda             *LambdaAttributes
+	NATGateway         *NATGatewayAttributes
+	RDSClusterInstance *RDSClusterInstanceAttributes
 }
 
 // Extract dispatches to the type-specific extractor for resourceType.
@@ -60,6 +63,24 @@ func Extract(resourceType string, attrs map[string]interface{}) (*ResourceAttrib
 			return nil, err
 		}
 		return &ResourceAttributes{Type: resourceType, EBS: ebs}, nil
+	case "aws_lambda_function":
+		fn, err := ExtractLambda(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, Lambda: fn}, nil
+	case "aws_nat_gateway":
+		nat, err := ExtractNATGateway(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, NATGateway: nat}, nil
+	case "aws_rds_cluster_instance":
+		rci, err := ExtractRDSClusterInstance(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, RDSClusterInstance: rci}, nil
 	}
 	return nil, nil
 }
@@ -69,5 +90,12 @@ func Extract(resourceType string, attrs map[string]interface{}) (*ResourceAttrib
 // callers can mutate it without affecting future returns. Order is stable
 // across calls so it can drive menus or docs without sorting.
 func SupportedTypes() []string {
-	return []string{"aws_instance", "aws_db_instance", "aws_ebs_volume"}
+	return []string{
+		"aws_instance",
+		"aws_db_instance",
+		"aws_ebs_volume",
+		"aws_lambda_function",
+		"aws_nat_gateway",
+		"aws_rds_cluster_instance",
+	}
 }

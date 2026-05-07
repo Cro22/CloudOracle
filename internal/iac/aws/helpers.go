@@ -106,6 +106,39 @@ func getNestedFirst(attrs map[string]interface{}, key string) (map[string]interf
 	return first, true, nil
 }
 
+// getStringList returns the value at key as a []string slice.
+//
+// JSON encodes string arrays as []interface{} of string entries, so each
+// element gets a type assertion. A non-string element is an error rather
+// than a silent skip — partial slices would lose data the caller likely
+// needs (Lambda's `architectures`, security_group lists, etc.).
+//
+// Empty lists are reported as (nil, false, nil) — callers that distinguish
+// "explicitly empty" from "absent" don't currently exist; aligning with
+// the missing/null behavior keeps the helper predictable.
+func getStringList(attrs map[string]interface{}, key string) ([]string, bool, error) {
+	raw, ok := attrs[key]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return nil, false, fmt.Errorf("attribute %q: want list, got %T", key, raw)
+	}
+	if len(list) == 0 {
+		return nil, false, nil
+	}
+	out := make([]string, len(list))
+	for i, v := range list {
+		s, ok := v.(string)
+		if !ok {
+			return nil, false, fmt.Errorf("attribute %q[%d]: want string, got %T", key, i, v)
+		}
+		out[i] = s
+	}
+	return out, true, nil
+}
+
 // errEmptyAttrs is the canonical error every extractor returns when its
 // input map is nil or empty. Centralized so the message stays uniform.
 func errEmptyAttrs(typ string) error {
