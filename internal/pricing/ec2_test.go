@@ -250,7 +250,7 @@ func TestEstimateEC2_BadEBSUnit(t *testing.T) {
 		RootBlockType: "gp3",
 	}
 	_, err := EstimateEC2(context.Background(), src, attrs, "us-east-2")
-	if err == nil || !strings.Contains(err.Error(), "expected root EBS unit GB-Mo") {
+	if err == nil || !strings.Contains(err.Error(), "expected EBS unit GB-Mo") {
 		t.Fatalf("err = %v, want unit-mismatch error", err)
 	}
 }
@@ -383,8 +383,8 @@ func TestEstimateEC2_BadEBSJSON(t *testing.T) {
 		RootBlockType: "gp3",
 	}
 	_, err := EstimateEC2(context.Background(), src, attrs, "us-east-2")
-	if err == nil || !strings.Contains(err.Error(), "parsing root EBS price") {
-		t.Fatalf("err = %v, want 'parsing root EBS price' error", err)
+	if err == nil || !strings.Contains(err.Error(), "parsing EBS price") {
+		t.Fatalf("err = %v, want 'parsing EBS price' error", err)
 	}
 }
 
