@@ -1,0 +1,35 @@
+{
+  "product": {
+    "productFamily": "Provisioned Concurrency",
+    "attributes": {
+      "regionCode": "us-east-2",
+      "architecture": "ARM",
+      "servicename": "AWS Lambda"
+    },
+    "sku": "LAMBDAPCARMUSE2"
+  },
+  "serviceCode": "AWSLambda",
+  "terms": {
+    "OnDemand": {
+      "LAMBDAPCARMUSE2.JRTCKXETXF": {
+        "priceDimensions": {
+          "LAMBDAPCARMUSE2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "GB-Hour",
+            "endRange": "Inf",
+            "description": "$0.012 per GB-Hour for ARM64 Provisioned Concurrency",
+            "appliesTo": [],
+            "rateCode": "LAMBDAPCARMUSE2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.012"}
+          }
+        },
+        "sku": "LAMBDAPCARMUSE2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}
