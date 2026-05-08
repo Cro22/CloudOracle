@@ -3,7 +3,6 @@ package pricing
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"math"
 	"strings"
 	"testing"
@@ -74,21 +73,21 @@ func TestLookupEBSStoragePrice_NoProducts(t *testing.T) {
 	}
 }
 
-func TestLookupEBSStoragePrice_MultipleProductsUsesFirst(t *testing.T) {
+func TestLookupEBSStoragePrice_MultipleProductsErrors(t *testing.T) {
+	// After 13.6 tightening, ambiguity is a hard error rather than a warn.
 	gp3 := loadFixture(t, "ec2_gp3_us_east_2.json")
 	second := strings.Replace(gp3, `"USD": "0.08"`, `"USD": "9.99"`, 1)
 	src := &scriptedGetter{responses: [][]string{{gp3, second}}}
-	logs := captureLogs(t, slog.LevelWarn)
 
-	price, err := lookupEBSStoragePrice(context.Background(), src, "gp3", "us-east-2")
-	if err != nil {
-		t.Fatalf("err: %v", err)
+	_, err := lookupEBSStoragePrice(context.Background(), src, "gp3", "us-east-2")
+	if err == nil {
+		t.Fatal("expected error on ambiguous EBS query")
 	}
-	if math.Abs(price-0.08) > 1e-9 {
-		t.Errorf("price = %v, want 0.08 (first product)", price)
+	if !strings.Contains(err.Error(), "filter under-constrained") {
+		t.Errorf("err = %v, want 'filter under-constrained' message", err)
 	}
-	if !strings.Contains(logs.String(), "multiple products") {
-		t.Errorf("expected warn log, got: %s", logs.String())
+	if !strings.Contains(err.Error(), "volumeType=gp3") {
+		t.Errorf("err missing volumeType context: %v", err)
 	}
 }
 

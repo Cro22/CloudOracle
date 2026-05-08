@@ -3,7 +3,6 @@ package pricing
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"CloudOracle/internal/iac/aws"
 )
@@ -30,6 +29,12 @@ import (
 //     more aws_rds_cluster_instance resources, not by toggling a flag.
 //  2. licenseModel = "No license required". Aurora doesn't charge a
 //     license fee on top of the compute rate.
+//  3. storage = "EBS Only" (standard Aurora compute pricing). Aurora's
+//     I/O Optimization mode is exposed as a second SKU
+//     ("Aurora IO Optimization Mode", ~30% higher per-hour rate that
+//     waives per-I/O charges); supporting it would require a cluster-
+//     level attribute we don't currently extract, so we hard-code the
+//     standard mode and document the trade-off here.
 //
 // Returns an error for nil attrs, empty region/Engine/InstanceClass,
 // unsupported engines, API failures, missing products, or unit
@@ -60,6 +65,7 @@ func EstimateRDSClusterInstance(ctx context.Context, src productGetter, attrs *a
 		"regionCode":       region,
 		"deploymentOption": "Single-AZ",
 		"licenseModel":     "No license required",
+		"storage":          "EBS Only",
 	}
 	products, err := src.GetProducts(ctx, "AmazonRDS", filters)
 	if err != nil {
@@ -69,12 +75,8 @@ func EstimateRDSClusterInstance(ctx context.Context, src productGetter, attrs *a
 		return Estimate{}, fmt.Errorf("EstimateRDSClusterInstance: no compute price found for %s/%s in %s", attrs.InstanceClass, dbEngine, region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: Aurora cluster instance query returned multiple products; using first",
-			"instanceClass", attrs.InstanceClass,
-			"engine", dbEngine,
-			"region", region,
-			"count", len(products),
-		)
+		return Estimate{}, fmt.Errorf("EstimateRDSClusterInstance: query returned %d products; filter under-constrained for instanceClass=%s engine=%s region=%s",
+			len(products), attrs.InstanceClass, dbEngine, region)
 	}
 	hourly, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {
@@ -93,6 +95,7 @@ func EstimateRDSClusterInstance(ctx context.Context, src productGetter, attrs *a
 		Notes: []string{
 			"Cluster-level storage and I/O charges not included (priced at aws_rds_cluster)",
 			"Aurora Multi-AZ is via reader replicas (multiple aws_rds_cluster_instance), not a per-instance flag",
+			"Pricing assumes standard Aurora mode (storage=EBS Only); I/O Optimization Mode is not modeled",
 		},
 	}, nil
 }

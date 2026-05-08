@@ -111,11 +111,8 @@ func lookupComputePrice(ctx context.Context, src productGetter, attrs *aws.EC2At
 		return 0, fmt.Errorf("EstimateEC2: no compute price found for %s in %s", attrs.InstanceType, region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: EC2 compute query returned multiple products; using first",
-			"instanceType", attrs.InstanceType,
-			"region", region,
-			"count", len(products),
-		)
+		return 0, fmt.Errorf("EstimateEC2: compute query returned %d products; filter under-constrained for instanceType=%s region=%s",
+			len(products), attrs.InstanceType, region)
 	}
 	hourly, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {

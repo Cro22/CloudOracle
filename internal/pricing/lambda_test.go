@@ -42,13 +42,10 @@ func TestEstimateLambda_ProvisionedConcurrencyZero_NoAPICall(t *testing.T) {
 }
 
 func TestEstimateLambda_ProvisionedConcurrency_X86_64(t *testing.T) {
-	body := strings.Replace(
-		loadFixture(t, "lambda_arm64_us_east_2.json"),
-		`"USD": "0.012"`,
-		`"USD": "0.015"`,
-		1,
-	)
-	body = strings.Replace(body, `"architecture": "ARM"`, `"architecture": "x86"`, 1)
+	// x86_64 SKU: usagetype has no -ARM suffix, price is $0.0000041667/GB-Second.
+	body := loadFixture(t, "lambda_arm64_us_east_2.json")
+	body = strings.Replace(body, `"USD": "0.0000033334"`, `"USD": "0.0000041667"`, 1)
+	body = strings.Replace(body, `USE2-Lambda-Provisioned-Concurrency-ARM`, `USE2-Lambda-Provisioned-Concurrency`, -1)
 	src := &scriptedGetter{responses: [][]string{{body}}}
 
 	attrs := &aws.LambdaAttributes{
@@ -61,18 +58,18 @@ func TestEstimateLambda_ProvisionedConcurrency_X86_64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EstimateLambda: %v", err)
 	}
-	want := 5 * 1.0 * HoursPerMonth * 0.015 // 54.75
-	if math.Abs(est.MonthlyUSD-want) > 1e-6 {
+	want := 5 * 1.0 * SecondsPerMonth * 0.0000041667 // ~54.75
+	if math.Abs(est.MonthlyUSD-want) > 1e-3 {
 		t.Errorf("MonthlyUSD = %v, want %v", est.MonthlyUSD, want)
 	}
 	if est.Confidence != ConfidenceLow {
 		t.Errorf("Confidence = %q, want low", est.Confidence)
 	}
-	if got := src.calls[0].filters["architecture"]; got != "x86" {
-		t.Errorf("architecture filter = %q, want x86", got)
+	if got := src.calls[0].filters["usagetype"]; got != "USE2-Lambda-Provisioned-Concurrency" {
+		t.Errorf("usagetype = %q, want USE2-Lambda-Provisioned-Concurrency", got)
 	}
-	if got := src.calls[0].filters["productFamily"]; got != "Provisioned Concurrency" {
-		t.Errorf("productFamily = %q", got)
+	if got := src.calls[0].filters["productFamily"]; got != "Serverless" {
+		t.Errorf("productFamily = %q, want Serverless", got)
 	}
 	if got := src.calls[0].service; got != "AWSLambda" {
 		t.Errorf("service = %q, want AWSLambda", got)
@@ -93,12 +90,12 @@ func TestEstimateLambda_ProvisionedConcurrency_ARM64(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EstimateLambda: %v", err)
 	}
-	want := 10 * 0.5 * HoursPerMonth * 0.012 // 43.8
-	if math.Abs(est.MonthlyUSD-want) > 1e-6 {
+	want := 10 * 0.5 * SecondsPerMonth * 0.0000033334 // ~43.80
+	if math.Abs(est.MonthlyUSD-want) > 1e-3 {
 		t.Errorf("MonthlyUSD = %v, want %v", est.MonthlyUSD, want)
 	}
-	if got := src.calls[0].filters["architecture"]; got != "ARM" {
-		t.Errorf("architecture filter = %q, want ARM", got)
+	if got := src.calls[0].filters["usagetype"]; got != "USE2-Lambda-Provisioned-Concurrency-ARM" {
+		t.Errorf("usagetype = %q, want -ARM suffix", got)
 	}
 }
 
@@ -150,7 +147,7 @@ func TestEstimateLambda_NoProducts(t *testing.T) {
 func TestEstimateLambda_BadUnit(t *testing.T) {
 	body := strings.Replace(
 		loadFixture(t, "lambda_arm64_us_east_2.json"),
-		`"unit": "GB-Hour"`,
+		`"unit": "Lambda-GB-Second"`,
 		`"unit": "Hrs"`,
 		1,
 	)
@@ -162,23 +159,39 @@ func TestEstimateLambda_BadUnit(t *testing.T) {
 		ProvisionedConcurrency: 1,
 	}
 	_, err := EstimateLambda(context.Background(), src, attrs, "us-east-2")
-	if err == nil || !strings.Contains(err.Error(), "expected PC unit GB-Hour") {
+	if err == nil || !strings.Contains(err.Error(), "expected PC unit Lambda-GB-Second") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestMapLambdaArchitecture(t *testing.T) {
+func TestEstimateLambda_AmbiguousQueryErrors(t *testing.T) {
+	body := loadFixture(t, "lambda_arm64_us_east_2.json")
+	second := strings.Replace(body, `"USD": "0.0000033334"`, `"USD": "0.99"`, 1)
+	src := &scriptedGetter{responses: [][]string{{body, second}}}
+	attrs := &aws.LambdaAttributes{
+		FunctionName:           "f",
+		MemorySize:             512,
+		Architecture:           "arm64",
+		ProvisionedConcurrency: 1,
+	}
+	_, err := EstimateLambda(context.Background(), src, attrs, "us-east-2")
+	if err == nil || !strings.Contains(err.Error(), "filter under-constrained") {
+		t.Fatalf("err = %v, want under-constrained error", err)
+	}
+}
+
+func TestLambdaArchitectureSuffix(t *testing.T) {
 	cases := []struct {
 		in, want string
 		err      bool
 	}{
-		{"x86_64", "x86", false},
-		{"", "x86", false},
-		{"arm64", "ARM", false},
+		{"x86_64", "", false},
+		{"", "", false},
+		{"arm64", "-ARM", false},
 		{"weird", "", true},
 	}
 	for _, c := range cases {
-		got, err := mapLambdaArchitecture(c.in)
+		got, err := lambdaArchitectureSuffix(c.in)
 		if c.err {
 			if err == nil {
 				t.Errorf("input %q: expected error", c.in)
@@ -191,5 +204,30 @@ func TestMapLambdaArchitecture(t *testing.T) {
 		if got != c.want {
 			t.Errorf("input %q: got %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestRegionPrefix_Known(t *testing.T) {
+	cases := map[string]string{
+		"us-east-1":      "USE1",
+		"us-east-2":      "USE2",
+		"us-west-1":      "USW1",
+		"us-west-2":      "USW2",
+		"eu-west-1":      "EUW1",
+		"eu-central-1":   "EUC1",
+		"ap-southeast-1": "APS1",
+		"ap-northeast-1": "APN1",
+	}
+	for region, want := range cases {
+		if got := regionPrefix(region); got != want {
+			t.Errorf("regionPrefix(%q) = %q, want %q", region, got, want)
+		}
+	}
+}
+
+func TestRegionPrefix_UnknownFallsBackToInput(t *testing.T) {
+	got := regionPrefix("af-south-1")
+	if got != "af-south-1" {
+		t.Errorf("regionPrefix(af-south-1) = %q, want literal fallback", got)
 	}
 }
