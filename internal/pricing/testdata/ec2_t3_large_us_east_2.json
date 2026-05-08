@@ -1,0 +1,40 @@
+{
+  "product": {
+    "productFamily": "Compute Instance",
+    "attributes": {
+      "instanceType": "t3.large",
+      "regionCode": "us-east-2",
+      "operatingSystem": "Linux",
+      "tenancy": "Shared",
+      "preInstalledSw": "NA",
+      "capacitystatus": "Used",
+      "vcpu": "2",
+      "memory": "8 GiB"
+    },
+    "sku": "JX5VPQ7TKDF8MWZE"
+  },
+  "serviceCode": "AmazonEC2",
+  "terms": {
+    "OnDemand": {
+      "JX5VPQ7TKDF8MWZE.JRTCKXETXF": {
+        "priceDimensions": {
+          "JX5VPQ7TKDF8MWZE.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "Hrs",
+            "endRange": "Inf",
+            "description": "$0.0832 per On Demand Linux t3.large Instance Hour",
+            "appliesTo": [],
+            "rateCode": "JX5VPQ7TKDF8MWZE.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.0832"}
+          }
+        },
+        "sku": "JX5VPQ7TKDF8MWZE",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}
