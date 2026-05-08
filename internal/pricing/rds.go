@@ -3,7 +3,6 @@ package pricing
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"CloudOracle/internal/iac/aws"
@@ -72,7 +71,7 @@ func EstimateRDS(ctx context.Context, src productGetter, attrs *aws.RDSAttribute
 	if err != nil {
 		return Estimate{}, err
 	}
-	storage, err := lookupRDSStoragePrice(ctx, src, storageVolType, deployment, region, attrs.AllocatedStorage)
+	storage, err := lookupRDSStoragePrice(ctx, src, storageVolType, dbEngine, deployment, region, attrs.AllocatedStorage)
 	if err != nil {
 		return Estimate{}, err
 	}
@@ -118,13 +117,8 @@ func lookupRDSComputePrice(ctx context.Context, src productGetter, instanceClass
 		return 0, fmt.Errorf("EstimateRDS: no compute price found for %s/%s/%s in %s", instanceClass, dbEngine, deployment, region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: RDS compute query returned multiple products; using first",
-			"instanceClass", instanceClass,
-			"engine", dbEngine,
-			"deployment", deployment,
-			"region", region,
-			"count", len(products),
-		)
+		return 0, fmt.Errorf("EstimateRDS: compute query returned %d products; filter under-constrained for instanceClass=%s engine=%s deployment=%s region=%s",
+			len(products), instanceClass, dbEngine, deployment, region)
 	}
 	hourly, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {
@@ -141,10 +135,18 @@ func lookupRDSComputePrice(ctx context.Context, src productGetter, instanceClass
 // Note that RDS uses a different filter vocabulary than EC2/EBS: the
 // filter name is volumeType (not volumeApiName) and the values are the
 // long-form names produced by mapRDSStorageType.
-func lookupRDSStoragePrice(ctx context.Context, src productGetter, storageVolType, deployment, region string, sizeGB int) (float64, error) {
+//
+// databaseEngine is required to disambiguate the storage SKU. AWS
+// catalogues a separate Database Storage row per supported engine
+// (PostgreSQL, MySQL, MariaDB, Oracle×N editions, SQL Server×N editions,
+// "Any") even though the per-GB price is currently identical across the
+// OSS engines. Filtering without it returns ~15 products in us-east-2,
+// which is what motivated this milestone's tightening.
+func lookupRDSStoragePrice(ctx context.Context, src productGetter, storageVolType, dbEngine, deployment, region string, sizeGB int) (float64, error) {
 	filters := map[string]string{
 		"productFamily":    "Database Storage",
 		"volumeType":       storageVolType,
+		"databaseEngine":   dbEngine,
 		"deploymentOption": deployment,
 		"regionCode":       region,
 	}
@@ -153,15 +155,11 @@ func lookupRDSStoragePrice(ctx context.Context, src productGetter, storageVolTyp
 		return 0, fmt.Errorf("EstimateRDS: storage lookup: %w", err)
 	}
 	if len(products) == 0 {
-		return 0, fmt.Errorf("EstimateRDS: no storage price found for %s/%s in %s", storageVolType, deployment, region)
+		return 0, fmt.Errorf("EstimateRDS: no storage price found for %s/%s/%s in %s", storageVolType, dbEngine, deployment, region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: RDS storage query returned multiple products; using first",
-			"volumeType", storageVolType,
-			"deployment", deployment,
-			"region", region,
-			"count", len(products),
-		)
+		return 0, fmt.Errorf("EstimateRDS: storage query returned %d products; filter under-constrained for volumeType=%s engine=%s deployment=%s region=%s",
+			len(products), storageVolType, dbEngine, deployment, region)
 	}
 	gbMo, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {

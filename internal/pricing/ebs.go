@@ -3,7 +3,6 @@ package pricing
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"CloudOracle/internal/iac/aws"
 )
@@ -41,11 +40,8 @@ func lookupEBSStoragePrice(ctx context.Context, src productGetter, volumeType, r
 		return 0, fmt.Errorf("lookupEBSStoragePrice: no EBS price found for %s in %s", volumeType, region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: EBS storage query returned multiple products; using first",
-			"volumeType", volumeType,
-			"region", region,
-			"count", len(products),
-		)
+		return 0, fmt.Errorf("lookupEBSStoragePrice: query returned %d products; filter under-constrained for volumeType=%s region=%s",
+			len(products), volumeType, region)
 	}
 	gbMo, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {

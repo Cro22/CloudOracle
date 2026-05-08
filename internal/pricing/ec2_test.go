@@ -199,24 +199,24 @@ func TestEstimateEC2_NoComputeProducts(t *testing.T) {
 	}
 }
 
-func TestEstimateEC2_MultipleComputeProductsUsesFirst(t *testing.T) {
+func TestEstimateEC2_MultipleComputeProductsErrors(t *testing.T) {
+	// Multiple products signals an under-constrained filter set, not a
+	// "pick one and warn" scenario. Tightened in milestone 13.6 — see
+	// the godoc on lookupComputePrice.
 	first := loadFixture(t, "ec2_t3_large_us_east_2.json")
 	second := strings.Replace(first, `"USD": "0.0832"`, `"USD": "9.99"`, 1)
 
 	src := &scriptedGetter{responses: [][]string{{first, second}}}
-	logs := captureLogs(t, slog.LevelWarn)
-
 	attrs := &aws.EC2Attributes{InstanceType: "t3.large"}
-	est, err := EstimateEC2(context.Background(), src, attrs, "us-east-2")
-	if err != nil {
-		t.Fatalf("EstimateEC2: %v", err)
+	_, err := EstimateEC2(context.Background(), src, attrs, "us-east-2")
+	if err == nil {
+		t.Fatal("expected error on ambiguous compute query")
 	}
-	wantCompute := 0.0832 * HoursPerMonth
-	if math.Abs(est.MonthlyUSD-wantCompute) > 1e-6 {
-		t.Errorf("MonthlyUSD = %v, want %v (must use first product)", est.MonthlyUSD, wantCompute)
+	if !strings.Contains(err.Error(), "filter under-constrained") {
+		t.Errorf("err = %v, want 'filter under-constrained' message", err)
 	}
-	if !strings.Contains(logs.String(), "multiple products") {
-		t.Errorf("expected warn log about multiple products, got: %s", logs.String())
+	if !strings.Contains(err.Error(), "instanceType=t3.large") {
+		t.Errorf("err missing instanceType context: %v", err)
 	}
 }
 

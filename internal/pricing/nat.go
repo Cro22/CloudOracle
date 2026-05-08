@@ -3,7 +3,6 @@ package pricing
 import (
 	"context"
 	"fmt"
-	"log/slog"
 
 	"CloudOracle/internal/iac/aws"
 )
@@ -48,10 +47,8 @@ func EstimateNATGateway(ctx context.Context, src productGetter, attrs *aws.NATGa
 		return Estimate{}, fmt.Errorf("EstimateNATGateway: no NAT Gateway price found in %s", region)
 	}
 	if len(products) > 1 {
-		slog.Warn("pricing: NAT Gateway query returned multiple products; using first",
-			"region", region,
-			"count", len(products),
-		)
+		return Estimate{}, fmt.Errorf("EstimateNATGateway: query returned %d products; filter under-constrained for region=%s",
+			len(products), region)
 	}
 	hourly, unit, err := parseOnDemandPriceUSD(products[0])
 	if err != nil {
