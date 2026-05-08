@@ -71,10 +71,11 @@ func EstimateEC2(ctx context.Context, src productGetter, attrs *aws.EC2Attribute
 	total := compute
 
 	if attrs.RootBlockSize > 0 {
-		rootEBS, err := lookupRootEBSPrice(ctx, src, attrs, region)
+		gbMo, err := lookupEBSStoragePrice(ctx, src, attrs.RootBlockType, region)
 		if err != nil {
-			return Estimate{}, err
+			return Estimate{}, fmt.Errorf("EstimateEC2: root EBS: %w", err)
 		}
+		rootEBS := gbMo * float64(attrs.RootBlockSize)
 		breakdown = append(breakdown, LineItem{Component: "RootEBS", MonthlyUSD: rootEBS})
 		total += rootEBS
 	} else {
@@ -124,38 +125,6 @@ func lookupComputePrice(ctx context.Context, src productGetter, attrs *aws.EC2At
 		return 0, fmt.Errorf("EstimateEC2: expected compute unit Hrs, got %q", unit)
 	}
 	return hourly * HoursPerMonth, nil
-}
-
-// lookupRootEBSPrice runs the Pricing API query for the root EBS volume
-// and returns the monthly USD cost (GB-month price * size).
-func lookupRootEBSPrice(ctx context.Context, src productGetter, attrs *aws.EC2Attributes, region string) (float64, error) {
-	filters := map[string]string{
-		"productFamily": "Storage",
-		"volumeApiName": attrs.RootBlockType,
-		"regionCode":    region,
-	}
-	products, err := src.GetProducts(ctx, "AmazonEC2", filters)
-	if err != nil {
-		return 0, fmt.Errorf("EstimateEC2: root EBS lookup: %w", err)
-	}
-	if len(products) == 0 {
-		return 0, fmt.Errorf("EstimateEC2: no EBS price found for %s in %s", attrs.RootBlockType, region)
-	}
-	if len(products) > 1 {
-		slog.Warn("pricing: EC2 root EBS query returned multiple products; using first",
-			"volumeType", attrs.RootBlockType,
-			"region", region,
-			"count", len(products),
-		)
-	}
-	gbMo, unit, err := parseOnDemandPriceUSD(products[0])
-	if err != nil {
-		return 0, fmt.Errorf("EstimateEC2: parsing root EBS price: %w", err)
-	}
-	if unit != "GB-Mo" {
-		return 0, fmt.Errorf("EstimateEC2: expected root EBS unit GB-Mo, got %q", unit)
-	}
-	return gbMo * float64(attrs.RootBlockSize), nil
 }
 
 // mapTenancy translates Terraform's tenancy attribute to the AWS Pricing

@@ -1,0 +1,36 @@
+{
+  "product": {
+    "productFamily": "Database Storage",
+    "attributes": {
+      "volumeType": "General Purpose",
+      "regionCode": "us-east-2",
+      "deploymentOption": "Single-AZ",
+      "storageMedia": "SSD-backed"
+    },
+    "sku": "RDSSTORGP2USE2"
+  },
+  "serviceCode": "AmazonRDS",
+  "terms": {
+    "OnDemand": {
+      "RDSSTORGP2USE2.JRTCKXETXF": {
+        "priceDimensions": {
+          "RDSSTORGP2USE2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "GB-Mo",
+            "endRange": "Inf",
+            "description": "$0.115 per GB-month of provisioned gp2 storage running Single-AZ - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "RDSSTORGP2USE2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.115"}
+          }
+        },
+        "sku": "RDSSTORGP2USE2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}
