@@ -1,0 +1,36 @@
+{
+  "product": {
+    "productFamily": "Storage",
+    "attributes": {
+      "volumeApiName": "gp3",
+      "regionCode": "us-east-2",
+      "storageMedia": "SSD-backed",
+      "volumeType": "General Purpose"
+    },
+    "sku": "ABDXKE9QMAJYGGHA"
+  },
+  "serviceCode": "AmazonEC2",
+  "terms": {
+    "OnDemand": {
+      "ABDXKE9QMAJYGGHA.JRTCKXETXF": {
+        "priceDimensions": {
+          "ABDXKE9QMAJYGGHA.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "GB-Mo",
+            "endRange": "Inf",
+            "description": "$0.08 per GB-month of General Purpose SSD (gp3) provisioned storage - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "ABDXKE9QMAJYGGHA.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.08"}
+          }
+        },
+        "sku": "ABDXKE9QMAJYGGHA",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}
