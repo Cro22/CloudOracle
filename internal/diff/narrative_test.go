@@ -95,21 +95,37 @@ func TestBuildPRNarrativePrompt_HappyPath(t *testing.T) {
 		}
 	}
 
-	// Lower-ranked movers must NOT appear (we cap at three to keep the
-	// model focused on the dominant items).
-	if strings.Contains(prompt, "aws_lambda_function.fn") {
-		t.Errorf("prompt unexpectedly includes 4th+ mover (lambda fn)")
+	// Lower-ranked movers must NOT appear in the Top resources block
+	// (we cap at three to keep the model focused on the dominant items).
+	// fn's caveat may legitimately appear in the "Other" caveat block
+	// so we narrow the search to the top-resources section.
+	topStart := strings.Index(prompt, "# Top resources by impact")
+	topEnd := strings.Index(prompt[topStart:], "\n# ")
+	if topStart < 0 || topEnd <= 0 {
+		t.Fatalf("could not locate '# Top resources' section in prompt:\n%s", prompt)
+	}
+	topBlock := prompt[topStart : topStart+topEnd]
+	if strings.Contains(topBlock, "aws_lambda_function.fn") {
+		t.Errorf("Top resources block unexpectedly includes 4th+ mover (lambda fn):\n%s", topBlock)
 	}
 
-	// Notable caveats should surface at least one of the per-resource
-	// note categories from the fixture.
-	for _, want := range []string{
-		"Operating system assumed Linux",
-		"Aurora Multi-AZ",
-	} {
-		if !strings.Contains(prompt, want) {
-			t.Errorf("prompt missing caveat %q", want)
-		}
+	// Caveats are grouped by resource. The Aurora primary-driver block
+	// names the address explicitly; "Aurora Multi-AZ" is in its bullets.
+	if !strings.Contains(prompt, "# Notable assumptions for the primary driver (aws_rds_cluster_instance.aurora)") {
+		t.Errorf("primary-driver caveat heading missing or wrong; got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Aurora Multi-AZ") {
+		t.Errorf("Aurora Multi-AZ caveat missing")
+	}
+
+	// Other resources' caveats appear under "Other ..." with explicit
+	// address prefixes — this is the line that prevents the LLM from
+	// attributing a NAT or web caveat to the RDS driver.
+	if !strings.Contains(prompt, "- aws_instance.web: Operating system assumed Linux") {
+		t.Errorf("web's Linux caveat missing or not attributed to its address; got:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "- aws_nat_gateway.nat: Hourly gateway charge only") {
+		t.Errorf("NAT gateway caveat must be address-prefixed in the 'Other' block")
 	}
 
 	// The three task instructions must be present.
@@ -453,26 +469,188 @@ func TestStatsSummary(t *testing.T) {
 	}
 }
 
-func TestCollectCaveats_DedupesAndCaps(t *testing.T) {
-	d := CostDiff{
-		Notes: []string{"plan-wide A", "plan-wide B"},
-		Changes: []pricing.ChangeEstimate{
-			withNotes(ce("a", "t", iac.ActionCreate, 1, pricing.ConfidenceLow), "plan-wide A", "per-res X"),
-			withNotes(ce("b", "t", iac.ActionCreate, 1, pricing.ConfidenceLow), "per-res X", "per-res Y"),
-		},
+// --- Caveat grouping (hotfix to prevent caveat hallucination) ---
+
+// caveatGroupedDiff returns a deterministic CostDiff used by the
+// grouping tests below. Primary driver = aws_instance.web (top mover);
+// "other" = aws_db_instance.db with one note; one plan-wide note.
+func caveatGroupedDiff() CostDiff {
+	web := withNotes(
+		ce("aws_instance.web", "aws_instance", iac.ActionCreate, 100, pricing.ConfidenceLow),
+		"Operating system assumed Linux",
+		"Pricing assumes On-Demand",
+	)
+	db := withNotes(
+		ce("aws_db_instance.db", "aws_db_instance", iac.ActionCreate, 50, pricing.ConfidenceLow),
+		"License: No license required",
+	)
+	all := []pricing.ChangeEstimate{web, db}
+	return CostDiff{
+		TotalMonthlyDelta: 150,
+		Currency:          "USD",
+		Changes:           all,
+		Created:           all,
+		TopMovers:         all,
+		Confidence:        pricing.ConfidenceLow,
+		Notes:             []string{"Net cost increase this plan"},
+		Stats:             Stats{Total: 2, Created: 2, Priced: 2},
 	}
-	got := collectCaveats(d, 10)
-	want := []string{"plan-wide A", "plan-wide B", "per-res X", "per-res Y"}
-	if len(got) != len(want) {
-		t.Fatalf("got %d caveats, want %d (%v vs %v)", len(got), len(want), got, want)
+}
+
+func TestBuildPRNarrativePrompt_CaveatsAreGroupedByResource(t *testing.T) {
+	prompt := BuildPRNarrativePrompt(caveatGroupedDiff())
+
+	// Sub-block 1: primary header names the address explicitly.
+	if !strings.Contains(prompt, "# Notable assumptions for the primary driver (aws_instance.web)") {
+		t.Errorf("primary-driver heading missing or wrong; got:\n%s", prompt)
 	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Errorf("caveat[%d] = %q, want %q", i, got[i], want[i])
+	// Primary's own notes appear without an address prefix (the heading
+	// already binds them).
+	for _, want := range []string{"- Operating system assumed Linux", "- Pricing assumes On-Demand"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("primary note %q missing", want)
 		}
 	}
 
-	if capped := collectCaveats(d, 2); len(capped) != 2 {
-		t.Errorf("cap=2 returned %d items: %v", len(capped), capped)
+	// Sub-block 2: other resources are explicitly attributed via prefix.
+	if !strings.Contains(prompt, "# Other notable assumptions (do NOT attribute to the primary driver)") {
+		t.Errorf("'other' heading missing")
+	}
+	if !strings.Contains(prompt, "- aws_db_instance.db: License: No license required") {
+		t.Errorf("'other' note missing its address prefix; got:\n%s", prompt)
+	}
+
+	// Critical anti-hallucination check: the primary driver's address
+	// must not appear inside the "Other" sub-block (would defeat the
+	// purpose of the split).
+	otherIdx := strings.Index(prompt, "# Other notable assumptions")
+	planIdx := strings.Index(prompt, "# Plan-wide notes")
+	if otherIdx < 0 || planIdx < 0 || planIdx < otherIdx {
+		t.Fatalf("section ordering wrong (other=%d plan=%d)", otherIdx, planIdx)
+	}
+	otherBlock := prompt[otherIdx:planIdx]
+	if strings.Contains(otherBlock, "aws_instance.web:") {
+		t.Errorf("primary driver leaked into 'Other' block:\n%s", otherBlock)
+	}
+
+	// Sub-block 3: plan-wide.
+	if !strings.Contains(prompt, "# Plan-wide notes\n- Net cost increase this plan") {
+		t.Errorf("plan-wide note missing or in wrong format")
+	}
+}
+
+func TestBuildPRNarrativePrompt_NoNotesOmitsSection(t *testing.T) {
+	web := ce("aws_instance.web", "aws_instance", iac.ActionCreate, 100, pricing.ConfidenceLow)
+	all := []pricing.ChangeEstimate{web}
+	d := CostDiff{
+		TotalMonthlyDelta: 100,
+		Changes:           all,
+		Created:           all,
+		TopMovers:         all,
+		Confidence:        pricing.ConfidenceLow,
+		Stats:             Stats{Total: 1, Created: 1, Priced: 1},
+	}
+	prompt := BuildPRNarrativePrompt(d)
+	for _, marker := range []string{
+		"# Notable assumptions for the primary driver",
+		"# Other notable assumptions",
+		"# Plan-wide notes",
+	} {
+		if strings.Contains(prompt, marker) {
+			t.Errorf("expected %q to be omitted when there are no notes; got:\n%s", marker, prompt)
+		}
+	}
+}
+
+func TestBuildPRNarrativePrompt_OnlyPrimaryHasNotes(t *testing.T) {
+	web := withNotes(
+		ce("aws_instance.web", "aws_instance", iac.ActionCreate, 100, pricing.ConfidenceLow),
+		"Linux assumed",
+	)
+	db := ce("aws_db_instance.db", "aws_db_instance", iac.ActionCreate, 50, pricing.ConfidenceLow)
+	all := []pricing.ChangeEstimate{web, db}
+	d := CostDiff{
+		TotalMonthlyDelta: 150,
+		Changes:           all,
+		Created:           all,
+		TopMovers:         all,
+		Stats:             Stats{Total: 2, Created: 2, Priced: 2},
+	}
+	prompt := BuildPRNarrativePrompt(d)
+	if !strings.Contains(prompt, "# Notable assumptions for the primary driver (aws_instance.web)") {
+		t.Errorf("primary heading missing")
+	}
+	if strings.Contains(prompt, "# Other notable assumptions") {
+		t.Errorf("'other' block should be omitted when no other resource has notes")
+	}
+	if strings.Contains(prompt, "# Plan-wide notes") {
+		t.Errorf("plan-wide block should be omitted when d.Notes is empty")
+	}
+}
+
+func TestBuildPRNarrativePrompt_OnlyOthersHaveNotes(t *testing.T) {
+	web := ce("aws_instance.web", "aws_instance", iac.ActionCreate, 100, pricing.ConfidenceLow)
+	db := withNotes(
+		ce("aws_db_instance.db", "aws_db_instance", iac.ActionCreate, 50, pricing.ConfidenceLow),
+		"License assumed",
+	)
+	all := []pricing.ChangeEstimate{web, db}
+	d := CostDiff{
+		TotalMonthlyDelta: 150,
+		Changes:           all,
+		Created:           all,
+		TopMovers:         all,
+		Stats:             Stats{Total: 2, Created: 2, Priced: 2},
+	}
+	prompt := BuildPRNarrativePrompt(d)
+	if strings.Contains(prompt, "# Notable assumptions for the primary driver") {
+		t.Errorf("primary block should be omitted when primary has no notes")
+	}
+	if !strings.Contains(prompt, "# Other notable assumptions (do NOT attribute to the primary driver)") {
+		t.Errorf("'other' heading missing")
+	}
+	if !strings.Contains(prompt, "- aws_db_instance.db: License assumed") {
+		t.Errorf("'other' note missing its address prefix")
+	}
+}
+
+func TestBuildPRNarrativePrompt_NoTopMovers(t *testing.T) {
+	// All-skipped plan: no TopMovers, so no primary driver. Only
+	// plan-wide notes should render.
+	mk := func(addr string) pricing.ChangeEstimate {
+		return pricing.ChangeEstimate{
+			ResourceAddress: addr,
+			ResourceType:    "aws_iam_role",
+			Action:          iac.ActionCreate,
+			Skipped:         true,
+			SkipReason:      "unsupported",
+		}
+	}
+	all := []pricing.ChangeEstimate{mk("aws_iam_role.r1"), mk("aws_iam_role.r2")}
+	d := CostDiff{
+		Changes: all,
+		Skipped: all,
+		Notes:   []string{"2 resources skipped (2 unsupported types, 0 estimation failures)"},
+		Stats:   Stats{Total: 2, Skipped: 2},
+	}
+	prompt := BuildPRNarrativePrompt(d)
+	if strings.Contains(prompt, "# Notable assumptions for the primary driver") {
+		t.Errorf("primary block should be omitted when there is no primary")
+	}
+	if strings.Contains(prompt, "# Other notable assumptions") {
+		t.Errorf("'other' block should be omitted when no resource carries per-resource notes")
+	}
+	if !strings.Contains(prompt, "# Plan-wide notes\n- 2 resources skipped") {
+		t.Errorf("plan-wide notes missing or malformed; got:\n%s", prompt)
+	}
+}
+
+func TestBuildPRNarrativePrompt_ContainsBillingModelDoNot(t *testing.T) {
+	prompt := BuildPRNarrativePrompt(happyPathDiff())
+	if !strings.Contains(prompt, "Suggest billing-model alternatives") {
+		t.Errorf("new billing-model DO NOT rule missing from prompt")
+	}
+	if !strings.Contains(prompt, "Reserved Instances") {
+		t.Errorf("billing-model rule should name the things it forbids (RI/SP/Spot)")
 	}
 }
