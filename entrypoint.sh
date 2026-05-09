@@ -5,12 +5,31 @@
 # `oracle pr-check` flags, then exec's the binary so its exit code is the
 # Action's exit code (1=input, 2=pricing, 3=output, 4=github).
 #
+# GitHub keeps dashes verbatim in input env var names (`plan-file` →
+# `INPUT_PLAN-FILE`); only spaces are converted to underscores. POSIX
+# parameter expansion can't reference names containing `-` because `-`
+# is the default-value operator inside `${...}`, so we go through
+# `printenv` instead. busybox's `printenv` (alpine) supports this.
+#
 # POSIX-only — no bashisms — because the alpine base ships /bin/sh as
 # busybox ash. Run shellcheck under -s sh to catch regressions.
 set -eu
 
+# `printenv NAME` exits non-zero when NAME is unset; `|| true` keeps the
+# script alive under `set -e` and the captured stdout is just empty.
+input() {
+    printenv "INPUT_$(echo "$1" | tr '[:lower:]' '[:upper:]')" || true
+}
+
+PLAN_FILE=$(input plan-file)
+REGION=$(input region)
+OUTPUT_FILE=$(input output-file)
+MARKER=$(input marker)
+NO_LLM=$(input no-llm)
+GITHUB_TOKEN_INPUT=$(input github-token)
+
 # --- Required input -------------------------------------------------------
-if [ -z "${INPUT_PLAN_FILE:-}" ]; then
+if [ -z "${PLAN_FILE}" ]; then
     echo "::error::plan-file input is required" >&2
     exit 1
 fi
@@ -19,16 +38,16 @@ fi
 # `set -- ...` rewrites positional parameters; each `set -- "$@" ...` line
 # appends to the existing argv. This is the POSIX-portable way to build
 # a list when arrays aren't available.
-set -- --plan-file="${INPUT_PLAN_FILE}"
-set -- "$@" --region="${INPUT_REGION:-us-east-2}"
-set -- "$@" --marker="${INPUT_MARKER:-cloudoracle-pr-v1}"
+set -- --plan-file="${PLAN_FILE}"
+set -- "$@" --region="${REGION:-us-east-2}"
+set -- "$@" --marker="${MARKER:-cloudoracle-pr-v1}"
 
-if [ "${INPUT_NO_LLM:-false}" = "true" ]; then
+if [ "${NO_LLM:-false}" = "true" ]; then
     set -- "$@" --no-llm
 fi
 
-if [ -n "${INPUT_OUTPUT_FILE:-}" ]; then
-    set -- "$@" --output="${INPUT_OUTPUT_FILE}"
+if [ -n "${OUTPUT_FILE}" ]; then
+    set -- "$@" --output="${OUTPUT_FILE}"
 fi
 
 # --- Auto-post on pull_request[_target] events ---------------------------
@@ -49,8 +68,8 @@ if [ "$event" = "pull_request" ] || [ "$event" = "pull_request_target" ]; then
         set -- "$@" --post
         set -- "$@" --repo="${GITHUB_REPOSITORY}"
         set -- "$@" --pr="${PR_NUMBER}"
-        if [ -n "${INPUT_GITHUB_TOKEN:-}" ]; then
-            set -- "$@" --token="${INPUT_GITHUB_TOKEN}"
+        if [ -n "${GITHUB_TOKEN_INPUT}" ]; then
+            set -- "$@" --token="${GITHUB_TOKEN_INPUT}"
         fi
     else
         echo "::warning::Could not extract PR number from GITHUB_REF=${GITHUB_REF:-<unset>}; rendering only, not posting." >&2
