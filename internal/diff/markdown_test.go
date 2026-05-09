@@ -486,6 +486,45 @@ func TestRenderNarrative_AllShapes(t *testing.T) {
 	}
 }
 
+// TestRenderMarkdown_BlocksAreSeparatedByBlankLines guards against a
+// past regression where text/template's `{{- range}}` trim swallowed
+// the newline after section headings, causing GitHub Markdown to
+// coalesce blocks (the table absorbed the preceding header, <details>
+// rendered as literal HTML, etc). Each marker below is the start of a
+// distinct Markdown block; in a well-formed comment, each one must be
+// preceded by a blank line ("\n\n") so GitHub renders them separately.
+func TestRenderMarkdown_BlocksAreSeparatedByBlankLines(t *testing.T) {
+	out := RenderMarkdown(happyPathDiff())
+
+	// "---\n" (rule line ending) avoids colliding with the table-separator
+	// row "|----------|...|" which embeds "---" but never "---\n".
+	markers := []string{
+		"**Net monthly change",
+		"### Top movers",
+		"| Resource | Action",
+		"<details>",
+		"---\n",
+		"<sub>",
+		"<!-- cloudoracle",
+	}
+
+	for _, m := range markers {
+		idx := strings.Index(out, m)
+		if idx < 0 {
+			t.Errorf("marker %q not found in output", m)
+			continue
+		}
+		if idx < 2 {
+			continue
+		}
+		if out[idx-2:idx] != "\n\n" {
+			start := max(0, idx-10)
+			t.Errorf("marker %q at index %d not preceded by blank line; got %q",
+				m, idx, out[start:idx])
+		}
+	}
+}
+
 func TestDeduplicateNotes(t *testing.T) {
 	c1 := withNotes(ce("aws_instance.a", "aws_instance", iac.ActionCreate, 50, pricing.ConfidenceLow),
 		"Operating system assumed Linux", "Common note")
