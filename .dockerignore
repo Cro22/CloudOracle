@@ -14,7 +14,7 @@ web/node_modules/
 web/dist/
 internal/api/dist/
 
-report.pdf
+example_report.pdf
 cloudoracle-report.pdf
 cloudoracle
 cloudoracle.exe
