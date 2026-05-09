@@ -1,0 +1,36 @@
+{
+  "product": {
+    "productFamily": "Storage",
+    "attributes": {
+      "volumeApiName": "io1",
+      "regionCode": "us-east-2",
+      "storageMedia": "SSD-backed",
+      "volumeType": "Provisioned IOPS"
+    },
+    "sku": "EBSIO1USE2"
+  },
+  "serviceCode": "AmazonEC2",
+  "terms": {
+    "OnDemand": {
+      "EBSIO1USE2.JRTCKXETXF": {
+        "priceDimensions": {
+          "EBSIO1USE2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "GB-Mo",
+            "endRange": "Inf",
+            "description": "$0.125 per GB-month of Provisioned IOPS (io1) volume - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "EBSIO1USE2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.125"}
+          }
+        },
+        "sku": "EBSIO1USE2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}

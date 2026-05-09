@@ -1,0 +1,35 @@
+{
+  "product": {
+    "productFamily": "NAT Gateway",
+    "attributes": {
+      "regionCode": "us-east-2",
+      "groupDescription": "Hourly charge for NAT Gateways",
+      "usagetype": "USE2-NatGateway-Hours"
+    },
+    "sku": "NATGWUSE2"
+  },
+  "serviceCode": "AmazonEC2",
+  "terms": {
+    "OnDemand": {
+      "NATGWUSE2.JRTCKXETXF": {
+        "priceDimensions": {
+          "NATGWUSE2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "Hrs",
+            "endRange": "Inf",
+            "description": "$0.045 per NAT Gateway Hour - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "NATGWUSE2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.045"}
+          }
+        },
+        "sku": "NATGWUSE2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}

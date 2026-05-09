@@ -1,0 +1,72 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.7.4",
+  "resource_changes": [
+    {
+      "address": "aws_instance.api",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "instance_type": "m5.large",
+          "ami": "ami-9876543210abcdef0",
+          "availability_zone": "us-east-2a"
+        }
+      }
+    },
+    {
+      "address": "aws_ebs_volume.cache",
+      "mode": "managed",
+      "type": "aws_ebs_volume",
+      "name": "cache",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "size": 500,
+          "type": "gp3",
+          "availability_zone": "us-east-2a"
+        },
+        "after": null
+      }
+    },
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "instance_class": "db.t3.medium",
+          "engine": "postgres",
+          "allocated_storage": 100
+        },
+        "after": {
+          "instance_class": "db.r5.large",
+          "engine": "postgres",
+          "allocated_storage": 100
+        }
+      }
+    },
+    {
+      "address": "data.aws_ami.ubuntu",
+      "mode": "data",
+      "type": "aws_ami",
+      "name": "ubuntu",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {
+          "id": "ami-deadbeef00000000"
+        }
+      }
+    }
+  ]
+}
