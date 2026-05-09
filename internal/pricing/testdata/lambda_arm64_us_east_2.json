@@ -1,0 +1,41 @@
+{
+  "product": {
+    "productFamily": "Serverless",
+    "attributes": {
+      "regionCode": "us-east-2",
+      "servicecode": "AWSLambda",
+      "groupDescription": "Concurrency weighted by memory assigned to function over the period for which it is provisioned, measured in GB-s for ARM",
+      "usagetype": "USE2-Lambda-Provisioned-Concurrency-ARM",
+      "locationType": "AWS Region",
+      "location": "US East (Ohio)",
+      "servicename": "AWS Lambda",
+      "operation": "",
+      "group": "AWS-Lambda-Provisioned-Concurrency-ARM"
+    },
+    "sku": "U6QUQCGH788KUY5N"
+  },
+  "serviceCode": "AWSLambda",
+  "terms": {
+    "OnDemand": {
+      "U6QUQCGH788KUY5N.JRTCKXETXF": {
+        "priceDimensions": {
+          "U6QUQCGH788KUY5N.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "Lambda-GB-Second",
+            "endRange": "Inf",
+            "description": "AWS Lambda - Provisioned Concurrency for ARM - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "U6QUQCGH788KUY5N.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.0000033334"}
+          }
+        },
+        "sku": "U6QUQCGH788KUY5N",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}

@@ -55,9 +55,10 @@ type openAIResponse struct {
 }
 
 func (o *OpenAPIProvider) GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error) {
+	return o.GenerateText(ctx, BuildPrompt(findings))
+}
 
-	prompt := BuildPrompt(findings)
-
+func (o *OpenAPIProvider) GenerateText(ctx context.Context, prompt string) (string, error) {
 	reqBody := openAIRequest{
 		Model: o.model,
 		Messages: []openAIMessage{

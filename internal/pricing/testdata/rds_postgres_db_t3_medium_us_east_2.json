@@ -1,0 +1,39 @@
+{
+  "product": {
+    "productFamily": "Database Instance",
+    "attributes": {
+      "instanceType": "db.t3.medium",
+      "regionCode": "us-east-2",
+      "databaseEngine": "PostgreSQL",
+      "deploymentOption": "Single-AZ",
+      "licenseModel": "No license required",
+      "vcpu": "2",
+      "memory": "4 GiB"
+    },
+    "sku": "RDSPGT3MEDXYZUS2"
+  },
+  "serviceCode": "AmazonRDS",
+  "terms": {
+    "OnDemand": {
+      "RDSPGT3MEDXYZUS2.JRTCKXETXF": {
+        "priceDimensions": {
+          "RDSPGT3MEDXYZUS2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "Hrs",
+            "endRange": "Inf",
+            "description": "$0.082 per RDS db.t3.medium Single-AZ instance hour (or partial hour) running PostgreSQL",
+            "appliesTo": [],
+            "rateCode": "RDSPGT3MEDXYZUS2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.082"}
+          }
+        },
+        "sku": "RDSPGT3MEDXYZUS2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}
