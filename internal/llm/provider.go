@@ -10,7 +10,17 @@ import (
 var ErrNoProvider = errors.New("no LLM provider configured")
 
 type Provider interface {
+	// GenerateSummary builds the v1 executive-summary prompt from findings
+	// and returns the LLM response. Convenience method; thin wrapper over
+	// GenerateText that calls BuildPrompt for the caller.
 	GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error)
+
+	// GenerateText sends an arbitrary prompt and returns the LLM response.
+	// The caller owns prompt construction. Used by v2 flows (e.g. PR
+	// narrative in internal/diff) that build their own context-specific
+	// prompts and do not want to go through findings shaping.
+	GenerateText(ctx context.Context, prompt string) (string, error)
+
 	Name() string
 }
 

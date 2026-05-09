@@ -1,0 +1,64 @@
+name: Terraform Plan with Cost Comment
+
+# Triggers on PRs that touch Terraform files. The path filter is a soft
+# optimisation: jobs are skipped when no .tf-shaped files changed, so a
+# PR editing only README.md doesn't burn a runner minute on a no-op cost
+# comment. Tighten the patterns to your monorepo's layout if needed.
+on:
+  pull_request:
+    paths:
+      - '**.tf'
+      - '**.tfvars'
+      - '.terraform.lock.hcl'
+
+permissions:
+  pull-requests: write   # CloudOracle needs this to post/update the comment.
+  id-token: write        # Required by aws-actions/configure-aws-credentials when using OIDC.
+  contents: read
+
+jobs:
+  cost-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # OIDC role assumption — the recommended path for cloud auth in
+      # CI. No long-lived AWS credentials sitting in repo secrets. See
+      # README.md in this directory for a sample IAM trust policy.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::123456789012:role/GitHubActionsCloudOracle
+          aws-region: us-east-2
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Terraform plan
+        run: terraform plan -out=tf.plan
+
+      - name: Convert plan to JSON
+        run: terraform show -json tf.plan > tf-plan.json
+
+      # CloudOracle reads tf-plan.json, queries the AWS Pricing API for
+      # each changed resource, asks the LLM for a 1-3 sentence narrative,
+      # and posts/upserts a comment on the PR using the workflow token.
+      - name: CloudOracle cost analysis
+        uses: Cro22/CloudOracle@v2.0.0
+        with:
+          plan-file: tf-plan.json
+          region: us-east-2
+        env:
+          # The LLM auto-detects which provider to use based on which key
+          # is set; you only need one of these. Pick whichever provider
+          # your org has procurement for. Without any key, CloudOracle
+          # falls back silently to the templated narrative.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

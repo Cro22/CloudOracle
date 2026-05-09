@@ -56,8 +56,10 @@ type claudeResponse struct {
 }
 
 func (c *ClaudeProvider) GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error) {
-	prompt := BuildPrompt(findings)
+	return c.GenerateText(ctx, BuildPrompt(findings))
+}
 
+func (c *ClaudeProvider) GenerateText(ctx context.Context, prompt string) (string, error) {
 	reqBody := claudeRequest{
 		Model:     c.model,
 		MaxTokens: 1024,

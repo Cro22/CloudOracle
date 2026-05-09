@@ -1,0 +1,67 @@
+name: Action self-test (Cost Comment)
+
+# In-repo smoke test for the CloudOracle Action. Runs the Action
+# against the toy Terraform plan in e2e-test/, using `uses: ./` so
+# Docker builds the image from the current checkout instead of
+# pulling a published tag. This catches regressions in the Action
+# manifest, Dockerfile.action, entrypoint.sh, or the pr-check
+# command before they reach a tagged release.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'action.yml'
+      - 'Dockerfile.action'
+      - 'entrypoint.sh'
+      - 'cmd/oracle/**'
+      - 'internal/iac/**'
+      - 'internal/pricing/**'
+      - 'internal/diff/**'
+      - 'internal/github/**'
+      - 'e2e-test/**'
+      - '.github/workflows/cost-self-test.yml'
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  cost-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+
+      - name: Terraform init
+        working-directory: e2e-test
+        run: terraform init
+
+      - name: Terraform plan
+        working-directory: e2e-test
+        run: terraform plan -out=tf.plan
+
+      - name: Convert plan to JSON
+        working-directory: e2e-test
+        run: terraform show -json tf.plan > tf-plan.json
+
+      # `uses: ./` builds Dockerfile.action from the checked-out tree,
+      # so any changes to the Action code on this branch are exercised
+      # end-to-end before publishing a tag.
+      - name: CloudOracle (in-repo build)
+        uses: ./
+        with:
+          plan-file: e2e-test/tf-plan.json
+          region: us-east-2
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
