@@ -53,9 +53,10 @@ type geminiResponse struct {
 }
 
 func (g *GeminiProvider) GenerateSummary(ctx context.Context, findings []shared.Finding) (string, error) {
+	return g.GenerateText(ctx, BuildPrompt(findings))
+}
 
-	prompt := BuildPrompt(findings)
-
+func (g *GeminiProvider) GenerateText(ctx context.Context, prompt string) (string, error) {
 	reqBody := geminiRequest{
 		Contents: []geminiContent{
 			{
