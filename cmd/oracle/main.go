@@ -7,6 +7,7 @@ import (
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/diff"
+	"CloudOracle/internal/github"
 	"CloudOracle/internal/iac"
 	"CloudOracle/internal/llm"
 	"CloudOracle/internal/logging"
@@ -103,7 +104,9 @@ func printUsage() {
 	fmt.Println("  oracle export --format=json|csv [--output file] - Export findings to JSON or CSV (stdout by default)")
 	fmt.Println("  oracle serve [--port 8080]               - Start the HTTP API for the dashboard")
 	fmt.Println("  oracle pr-check --plan-file=plan.json [--region=us-east-2] [--output=comment.md] [--no-llm]")
-	fmt.Println("                                           - Render a Terraform plan as a PR-comment Markdown")
+	fmt.Println("                  [--post --repo=owner/name --pr=N [--token=TOK] [--marker=cloudoracle-pr-v1]]")
+	fmt.Println("                                           - Render a Terraform plan as a PR-comment Markdown,")
+	fmt.Println("                                             optionally posting/updating it on GitHub")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
@@ -448,7 +451,30 @@ const (
 	exitPRCheckInputErr   = 1
 	exitPRCheckPricingErr = 2
 	exitPRCheckOutputErr  = 3
+	exitPRCheckGitHubErr  = 4
 )
+
+// defaultMarker matches the HTML marker that diff.RenderMarkdown emits at
+// the bottom of every CloudOracle PR comment. The --marker flag exists so
+// users can override (e.g. for a future v2 marker without breaking
+// existing v1 comments) but the default is the canonical one.
+const defaultMarker = "cloudoracle-pr-v1"
+
+// githubPoster is the subset of *github.Client behaviour runPRCheck
+// actually exercises. Defining it here (rather than exporting one from
+// internal/github) keeps the test fake's surface tiny: a single method
+// instead of the whole Client.
+type githubPoster interface {
+	PostOrUpdateComment(ctx context.Context, repo github.Repo, prNumber int, body, marker string) (int64, bool, error)
+}
+
+// newPRCheckGithubClient is the factory used by runPRCheck to obtain a
+// githubPoster. Wrapped as a package-level var so tests can swap it for
+// a recording fake. Production wraps github.NewClient — *github.Client
+// already satisfies githubPoster by structural typing.
+var newPRCheckGithubClient = func(token string) githubPoster {
+	return github.NewClient(token)
+}
 
 // newPRCheckSource builds the pricing.Source used by `pr-check`.
 // Wrapped as a package-level var so tests can swap it for a fake
@@ -486,6 +512,11 @@ func runPRCheck(ctx context.Context, cfg config.Config, args []string, stdout, s
 	region := fs.String("region", "us-east-2", "AWS region for pricing lookups")
 	output := fs.String("output", "", "file to write the Markdown to; empty or \"-\" means stdout")
 	noLLM := fs.Bool("no-llm", false, "force the templated narrative even if an LLM provider is configured")
+	post := fs.Bool("post", false, "post the rendered Markdown as a PR comment (upserts via marker)")
+	repoFlag := fs.String("repo", "", "target repo in `owner/name` form (required when --post is set)")
+	prNumber := fs.Int("pr", 0, "target PR number (required when --post is set)")
+	tokenFlag := fs.String("token", "", "GitHub token; falls back to the GITHUB_TOKEN env var when empty")
+	marker := fs.String("marker", defaultMarker, "HTML marker substring used to find the existing CloudOracle comment for upsert")
 
 	if err := fs.Parse(args); err != nil {
 		// flag.Parse already wrote a usage message to stderr. -h / --help
@@ -522,20 +553,103 @@ func runPRCheck(ctx context.Context, cfg config.Config, args []string, stdout, s
 
 	md := renderPRCheckMarkdown(ctx, cfg, costDiff, *noLLM)
 
+	// Output first (stdout when unset or "-"; file otherwise). --output
+	// and --post are independent: a CI run that sets both gets the file
+	// for artefact upload AND the comment posted.
 	if *output == "" || *output == "-" {
 		if _, err := io.WriteString(stdout, md); err != nil {
 			slog.Error("pr-check: writing to stdout failed", "error", err)
 			return exitPRCheckOutputErr
 		}
-		return exitPRCheckOK
+	} else {
+		if err := os.WriteFile(*output, []byte(md), 0o644); err != nil {
+			fmt.Fprintf(stderr, "oracle pr-check: --output %q: %v\n", *output, err)
+			return exitPRCheckOutputErr
+		}
+		slog.Info("pr-check: wrote markdown", "path", *output, "bytes", len(md))
 	}
 
-	if err := os.WriteFile(*output, []byte(md), 0o644); err != nil {
-		fmt.Fprintf(stderr, "oracle pr-check: --output %q: %v\n", *output, err)
-		return exitPRCheckOutputErr
+	if !*post {
+		return exitPRCheckOK
 	}
-	slog.Info("pr-check: wrote markdown", "path", *output, "bytes", len(md))
+	return runPRCheckPost(ctx, *repoFlag, *prNumber, *tokenFlag, md, *marker, stderr)
+}
+
+// runPRCheckPost validates the post-related flags and dispatches to the
+// configured githubPoster. Split from runPRCheck so the post path's
+// flag-validation, token resolution, and error mapping have one home —
+// the orchestrator stays linear and the unit tests can target each
+// failure mode without rebuilding the analyze/render plumbing.
+func runPRCheckPost(ctx context.Context, repoFlag string, prNumber int, tokenFlag, body, marker string, stderr io.Writer) int {
+	if prNumber <= 0 {
+		fmt.Fprintln(stderr, "oracle pr-check: --pr must be a positive integer when --post is set")
+		return exitPRCheckInputErr
+	}
+	repo, err := parseRepo(repoFlag)
+	if err != nil {
+		fmt.Fprintf(stderr, "oracle pr-check: %v\n", err)
+		return exitPRCheckInputErr
+	}
+	token := tokenFlag
+	if token == "" {
+		token = os.Getenv("GITHUB_TOKEN")
+	}
+	if token == "" {
+		fmt.Fprintln(stderr, "oracle pr-check: --token or GITHUB_TOKEN env required when --post is set")
+		return exitPRCheckInputErr
+	}
+
+	client := newPRCheckGithubClient(token)
+	id, created, err := client.PostOrUpdateComment(ctx, repo, prNumber, body, marker)
+	if err != nil {
+		return classifyGithubError(err, stderr)
+	}
+
+	action := "updated"
+	if created {
+		action = "created"
+	}
+	slog.Info("pr-check: github comment "+action,
+		"comment_id", id,
+		"repo", repoFlag,
+		"pr", prNumber,
+		"marker", marker)
 	return exitPRCheckOK
+}
+
+// parseRepo accepts the "owner/name" form used by GitHub URLs and
+// returns a github.Repo. Both halves must be non-empty; we use SplitN
+// with n=2 so a name containing a slash (which GitHub forbids anyway)
+// would be caught by the empty-half check rather than silently keeping
+// the trailing portion.
+func parseRepo(s string) (github.Repo, error) {
+	parts := strings.SplitN(s, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return github.Repo{}, fmt.Errorf("--repo must be in 'owner/name' format, got %q", s)
+	}
+	return github.Repo{Owner: parts[0], Name: parts[1]}, nil
+}
+
+// classifyGithubError maps an error string from internal/github to a
+// user-facing stderr line and the exit-4 code. Matching is by stable
+// substring rather than wrapped sentinel errors because internal/github
+// uses fmt.Errorf with prefix conventions (documented at the
+// PostOrUpdateComment godoc); converting to typed errors would couple
+// the two packages tighter than necessary.
+func classifyGithubError(err error, stderr io.Writer) int {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "authentication failed"):
+		fmt.Fprintln(stderr, "oracle pr-check: github post failed: authentication; check token permissions")
+	case strings.Contains(msg, "not found"):
+		fmt.Fprintln(stderr, "oracle pr-check: github post failed: repo or PR not found")
+	case strings.Contains(msg, "validation failed"):
+		fmt.Fprintf(stderr, "oracle pr-check: github post failed: validation: %s\n",
+			strings.TrimPrefix(msg, "github: validation failed: "))
+	default:
+		fmt.Fprintf(stderr, "oracle pr-check: github post failed: %s\n", msg)
+	}
+	return exitPRCheckGitHubErr
 }
 
 // renderPRCheckMarkdown picks between LLM-narrated and templated render.
