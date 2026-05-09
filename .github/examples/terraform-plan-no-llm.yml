@@ -1,0 +1,42 @@
+name: Terraform Plan with Cost Comment (No LLM)
+
+# Minimal example for teams that:
+#   - cannot or do not want to send plan data to an LLM provider
+#   - haven't set up OIDC and prefer long-lived AWS access keys
+#   - want the smallest possible permissions surface
+#
+# The output is the deterministic templated narrative ("This plan adds
+# N resources..."), which is functional but less informative than the
+# LLM-narrated version in terraform-plan.yml.
+on:
+  pull_request:
+    paths: ['**.tf']
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  cost-impact:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - run: terraform init
+
+      - run: terraform plan -out=tf.plan
+
+      - run: terraform show -json tf.plan > tf-plan.json
+
+      - uses: Cro22/CloudOracle@v2.0.0
+        with:
+          plan-file: tf-plan.json
+          no-llm: 'true'

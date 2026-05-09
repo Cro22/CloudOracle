@@ -1,0 +1,39 @@
+{
+  "product": {
+    "productFamily": "Database Instance",
+    "attributes": {
+      "instanceType": "db.r5.large",
+      "regionCode": "us-east-2",
+      "databaseEngine": "Aurora PostgreSQL",
+      "deploymentOption": "Single-AZ",
+      "licenseModel": "No license required",
+      "vcpu": "2",
+      "memory": "16 GiB"
+    },
+    "sku": "AURPGR5LARGEUSE2"
+  },
+  "serviceCode": "AmazonRDS",
+  "terms": {
+    "OnDemand": {
+      "AURPGR5LARGEUSE2.JRTCKXETXF": {
+        "priceDimensions": {
+          "AURPGR5LARGEUSE2.JRTCKXETXF.6YS6EN2CT7": {
+            "unit": "Hrs",
+            "endRange": "Inf",
+            "description": "$0.29 per Aurora PostgreSQL db.r5.large instance hour - US East (Ohio)",
+            "appliesTo": [],
+            "rateCode": "AURPGR5LARGEUSE2.JRTCKXETXF.6YS6EN2CT7",
+            "beginRange": "0",
+            "pricePerUnit": {"USD": "0.29"}
+          }
+        },
+        "sku": "AURPGR5LARGEUSE2",
+        "effectiveDate": "2024-01-01T00:00:00Z",
+        "offerTermCode": "JRTCKXETXF",
+        "termAttributes": {}
+      }
+    }
+  },
+  "version": "20240101000000",
+  "publicationDate": "2024-01-01T00:00:00Z"
+}

@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1.6
+#
+# CloudOracle Action image (Hito 16.4).
+#
+# Builds the `oracle` CLI as a static binary and packages it with the
+# entrypoint shim that adapts GitHub Action inputs to `pr-check` flags.
+# This Dockerfile is independent from the root Dockerfile (which still
+# builds the v1 dashboard image); action.yml references this file
+# explicitly via `image: 'Dockerfile.action'`.
+
+# --- Build stage ----------------------------------------------------------
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+
+# Module cache layer first so dep changes don't bust the source layer.
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy only what `go build ./cmd/oracle` needs. The web/ frontend and
+# probe-pricing helper are excluded via .dockerignore at the project
+# root, but a narrower COPY here keeps the build resilient even if
+# .dockerignore drifts.
+COPY cmd ./cmd
+COPY internal ./internal
+
+# internal/api uses `//go:embed all:dist` to bundle the v1 dashboard
+# frontend. The Action build doesn't include the React frontend (the
+# `serve` subcommand still compiles in but isn't reachable through the
+# Action entrypoint), and `go:embed` requires the matched directory to
+# contain at least one file. Drop a placeholder so the embed directive
+# resolves; serving the dashboard from this image would render the
+# "dashboard bundle not found" fallback HTML — fine, since the Action
+# never invokes `serve`.
+RUN mkdir -p internal/api/dist && echo "stub" > internal/api/dist/.placeholder
+
+# CGO disabled → fully static binary, no glibc/musl runtime needed.
+# -ldflags "-s -w" strips debug + symbol tables (~25MB → ~15MB).
+# -trimpath removes local build paths from the binary, useful for
+# reproducibility and to avoid leaking developer paths into stack traces.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/oracle \
+    ./cmd/oracle
+
+# --- Final stage ----------------------------------------------------------
+FROM alpine:3.19
+
+# ca-certificates is required for HTTPS to AWS Pricing API and GitHub
+# REST API. tzdata is omitted: the binary uses UTC for slog timestamps
+# and we don't render local time anywhere.
+RUN apk add --no-cache ca-certificates
+
+COPY --from=build /out/oracle /usr/local/bin/oracle
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]

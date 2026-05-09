@@ -1,24 +1,59 @@
+# Shared .dockerignore — applies to BOTH the v1 dashboard build
+# (Dockerfile) and the v2 Action build (Dockerfile.action).
+#
+# Rule of thumb: only list paths neither image needs in its build
+# context. If a path is needed by exactly one of the two, leave it
+# in and let the COPY in the other Dockerfile decide. Splitting this
+# file per-Dockerfile (e.g. via Dockerfile.<name>.dockerignore) is
+# avoided so we have one source of truth.
+
+# --- Local dev / VCS / IDE noise ---
 .git/
+.github/
 .idea/
 .claude/
 
+# --- Build artefacts that should never enter an image ---
 *.exe
 *.test
 *.out
 *.pem
+oracle
+oracle.exe
+probe-pricing
+probe-pricing.exe
+cloudoracle
+cloudoracle.exe
 
+# --- Secrets ---
 .env
 .env.*
 
+# --- v1 dashboard frontend artefacts ---
+# (rebuilt inside the multi-stage v1 Dockerfile; ignored from the host)
 web/node_modules/
 web/dist/
 internal/api/dist/
 
-report.pdf
-cloudoracle-report.pdf
-cloudoracle
-cloudoracle.exe
+# --- Test fixtures and tests (not needed at runtime) ---
+**/testdata/
+**/*_test.go
 
-Dockerfile
-.dockerignore
+# --- Other cmd/ binaries that are dev-only, not for shipping ---
+cmd/probe-pricing/
+cmd/checkpoint*/
+cmd/narrative-preview/
+
+# --- Project meta / sample artefacts ---
+checkpoint/
+docker-compose.yml
+example.png
+example_report.pdf
+examplepdf.png
+cloudoracle-report.pdf
 README.md
+
+# --- Docker plumbing ---
+Dockerfile
+Dockerfile.action
+.dockerignore

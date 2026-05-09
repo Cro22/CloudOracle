@@ -1,0 +1,36 @@
+name: 'CloudOracle PR Cost Comment'
+description: 'Posts a cost-impact analysis comment on Terraform pull requests, with an LLM-generated narrative.'
+author: 'Cro22'
+
+branding:
+  icon: 'dollar-sign'
+  color: 'green'
+
+inputs:
+  plan-file:
+    description: 'Path to the JSON output of `terraform show -json plan.tfplan`. Required.'
+    required: true
+  region:
+    description: 'AWS region for Pricing API queries.'
+    required: false
+    default: 'us-east-2'
+  output-file:
+    description: 'Optional path to also write the rendered Markdown to a file (in addition to posting). Useful for uploading the comment as an artefact.'
+    required: false
+    default: ''
+  marker:
+    description: 'HTML comment marker used to find the existing CloudOracle comment for upsert. Bump if you change the comment template format.'
+    required: false
+    default: 'cloudoracle-pr-v1'
+  no-llm:
+    description: 'If "true", disables the LLM narrative and falls back to the templated text. Use when LLM keys are unavailable or disallowed.'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token used to post the comment. Defaults to the workflow token. Requires `pull-requests: write` permission.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'docker'
+  image: 'Dockerfile.action'
