@@ -6,9 +6,12 @@ import (
 	"CloudOracle/internal/cloud"
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
+	"CloudOracle/internal/diff"
+	"CloudOracle/internal/iac"
 	"CloudOracle/internal/llm"
 	"CloudOracle/internal/logging"
 	"CloudOracle/internal/migrations"
+	"CloudOracle/internal/pricing"
 	"CloudOracle/internal/report"
 	"CloudOracle/internal/shared"
 	"context"
@@ -20,6 +23,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -39,6 +43,16 @@ func main() {
 	logging.Setup(cfg.LogLevel, cfg.LogFormat)
 
 	ctx := context.Background()
+
+	// pr-check is a stateless plan→markdown transform — no database
+	// involved. The GitHub Action that wraps this binary in Hito 16.3
+	// runs in environments where Postgres is not available, so we
+	// dispatch this subcommand before db.Connect to avoid a spurious
+	// connection failure.
+	if os.Args[1] == "pr-check" {
+		os.Exit(runPRCheck(ctx, cfg, os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	pool, err := db.Connect(ctx, cfg.DB)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
@@ -88,6 +102,8 @@ func printUsage() {
 	fmt.Println("  oracle trend [--days N]                  - Show cost trends over time")
 	fmt.Println("  oracle export --format=json|csv [--output file] - Export findings to JSON or CSV (stdout by default)")
 	fmt.Println("  oracle serve [--port 8080]               - Start the HTTP API for the dashboard")
+	fmt.Println("  oracle pr-check --plan-file=plan.json [--region=us-east-2] [--output=comment.md] [--no-llm]")
+	fmt.Println("                                           - Render a Terraform plan as a PR-comment Markdown")
 }
 
 func runSeed(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
@@ -420,6 +436,129 @@ func runExport(ctx context.Context, pool *db.Pool, args []string) {
 			"path", *output,
 		)
 	}
+}
+
+// pr-check exit codes. Differentiated so the GitHub Action wrapper in
+// Hito 16.3 can distinguish "the developer's plan is broken" (1) from
+// "our pricing dependency failed" (2) from "we can't write the output"
+// (3) — different remediations for each. The other oracle subcommands
+// use exit 1 uniformly; pr-check is the first to be CI-targeted.
+const (
+	exitPRCheckOK         = 0
+	exitPRCheckInputErr   = 1
+	exitPRCheckPricingErr = 2
+	exitPRCheckOutputErr  = 3
+)
+
+// newPRCheckSource builds the pricing.Source used by `pr-check`.
+// Wrapped as a package-level var so tests can swap it for a fake
+// without spinning up the AWS SDK or hitting the network. Production
+// builds get a 7-day disk cache wrapping a real AWS Pricing client;
+// the cache is best-effort — a directory-creation failure logs WARN
+// and falls back to the uncached client rather than aborting.
+var newPRCheckSource = func(ctx context.Context) (diff.Source, error) {
+	client, err := pricing.NewClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dir, dirErr := pricing.DefaultCacheDir()
+	if dirErr != nil || dir == "" {
+		slog.Warn("pricing cache disabled, using direct client", "error", dirErr)
+		return client, nil
+	}
+	cache, err := pricing.NewCache(client, dir, 7*24*time.Hour)
+	if err != nil {
+		slog.Warn("pricing cache disabled, using direct client", "error", err)
+		return client, nil
+	}
+	return cache, nil
+}
+
+// runPRCheck is the orchestrator for the `pr-check` subcommand. It
+// returns the process exit code instead of calling os.Exit directly so
+// it is testable in-process; main() does the os.Exit at the dispatch
+// site. stdout receives the rendered Markdown when --output is empty
+// or "-"; stderr receives flag-parse and error messages.
+func runPRCheck(ctx context.Context, cfg config.Config, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("pr-check", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	planFile := fs.String("plan-file", "", "path to `terraform show -json` output (required)")
+	region := fs.String("region", "us-east-2", "AWS region for pricing lookups")
+	output := fs.String("output", "", "file to write the Markdown to; empty or \"-\" means stdout")
+	noLLM := fs.Bool("no-llm", false, "force the templated narrative even if an LLM provider is configured")
+
+	if err := fs.Parse(args); err != nil {
+		// flag.Parse already wrote a usage message to stderr. -h / --help
+		// is a deliberate user action, not a malformed invocation, so it
+		// exits 0; everything else is a flag-parse failure (exit 1).
+		if errors.Is(err, flag.ErrHelp) {
+			return exitPRCheckOK
+		}
+		return exitPRCheckInputErr
+	}
+
+	if *planFile == "" {
+		fmt.Fprintln(stderr, "oracle pr-check: --plan-file is required")
+		return exitPRCheckInputErr
+	}
+
+	plan, err := iac.ParsePlanFile(*planFile)
+	if err != nil {
+		fmt.Fprintf(stderr, "oracle pr-check: --plan-file %q: %v\n", *planFile, err)
+		return exitPRCheckInputErr
+	}
+
+	source, err := newPRCheckSource(ctx)
+	if err != nil {
+		slog.Error("pr-check: pricing source unavailable", "error", err)
+		return exitPRCheckPricingErr
+	}
+
+	costDiff, err := diff.Analyze(ctx, source, plan, *region)
+	if err != nil {
+		slog.Error("pr-check: diff analysis failed", "region", *region, "error", err)
+		return exitPRCheckPricingErr
+	}
+
+	md := renderPRCheckMarkdown(ctx, cfg, costDiff, *noLLM)
+
+	if *output == "" || *output == "-" {
+		if _, err := io.WriteString(stdout, md); err != nil {
+			slog.Error("pr-check: writing to stdout failed", "error", err)
+			return exitPRCheckOutputErr
+		}
+		return exitPRCheckOK
+	}
+
+	if err := os.WriteFile(*output, []byte(md), 0o644); err != nil {
+		fmt.Fprintf(stderr, "oracle pr-check: --output %q: %v\n", *output, err)
+		return exitPRCheckOutputErr
+	}
+	slog.Info("pr-check: wrote markdown", "path", *output, "bytes", len(md))
+	return exitPRCheckOK
+}
+
+// renderPRCheckMarkdown picks between LLM-narrated and templated render.
+// Splitting it from runPRCheck keeps the orchestrator's branching
+// cyclomatic-low and makes the LLM-fallback path easy to reason about
+// in isolation: LLM disabled (--no-llm), no provider keys configured,
+// or provider construction error all converge on the same templated
+// path.
+func renderPRCheckMarkdown(ctx context.Context, cfg config.Config, d diff.CostDiff, noLLM bool) string {
+	if noLLM {
+		return diff.RenderMarkdown(d)
+	}
+	provider, err := llm.NewProvider(cfg.LLM)
+	if err != nil {
+		if errors.Is(err, llm.ErrNoProvider) {
+			slog.Info("pr-check: no LLM provider configured, using templated narrative")
+		} else {
+			slog.Warn("pr-check: LLM provider error, using templated narrative", "error", err)
+		}
+		return diff.RenderMarkdown(d)
+	}
+	slog.Info("pr-check: rendering with LLM narrative", "provider", provider.Name())
+	return diff.RenderMarkdownWithLLM(ctx, d, provider)
 }
 
 func runServe(pool *db.Pool, args []string) {
