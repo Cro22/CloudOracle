@@ -22,12 +22,6 @@ const maxNarrativeChars = 500
 // context the model needs to identify the primary driver.
 const promptTopMoversN = 3
 
-// promptCaveatsN caps the assumption list inside the prompt to avoid
-// pushing the model into the weeds. Eight is enough to surface the
-// notable Linux/Aurora/license assumptions we have today without
-// drowning the actual cost data.
-const promptCaveatsN = 8
-
 // preamblePrefixes are common conversational openers some models tack on
 // despite "no preamble" instructions. Stripped case-insensitively. Order
 // matters: longer, more specific prefixes are listed first so they match
@@ -150,18 +144,7 @@ func BuildPRNarrativePrompt(d CostDiff) string {
 		sb.WriteByte('\n')
 	}
 
-	sb.WriteString("# Notable assumptions in this estimate\n")
-	caveats := collectCaveats(d, promptCaveatsN)
-	if len(caveats) == 0 {
-		sb.WriteString("(none)\n\n")
-	} else {
-		for _, c := range caveats {
-			sb.WriteString("- ")
-			sb.WriteString(c)
-			sb.WriteByte('\n')
-		}
-		sb.WriteByte('\n')
-	}
+	writeCaveatsByResource(&sb, d)
 
 	sb.WriteString("# Your task\n")
 	sb.WriteString("Write 1-3 sentences that:\n")
@@ -173,7 +156,8 @@ func BuildPRNarrativePrompt(d CostDiff) string {
 	sb.WriteString("- List resources by name unless they are the primary driver.\n")
 	sb.WriteString("- Use cheerleading language (\"great\", \"looks good\", \"concerning\").\n")
 	sb.WriteString("- Use markdown headings or lists (your output is inline prose only).\n")
-	sb.WriteString("- Suggest IaC changes (\"you should add...\"); only point out cost properties.\n\n")
+	sb.WriteString("- Suggest IaC changes (\"you should add...\"); only point out cost properties.\n")
+	sb.WriteString("- Suggest billing-model alternatives (Reserved Instances, Savings Plans, Spot) — those are pricing levers, not cost-shape alternatives. Limit suggestions to architectural/sizing changes (different instance class, storage type, deployment shape).\n\n")
 	sb.WriteString("Output only the prose. No preamble. No \"Here is the narrative:\". Just the 1-3 sentences.")
 	return sb.String()
 }
@@ -286,32 +270,102 @@ func statsSummary(s Stats) string {
 	return strings.Join(parts, ", ")
 }
 
-// collectCaveats gathers plan-wide and per-resource notes into a
-// deduplicated list, capped at max. Plan-wide notes come first because
-// they describe the overall estimate; per-resource notes follow in
-// first-seen order.
-func collectCaveats(d CostDiff, max int) []string {
-	out := make([]string, 0, max)
-	seen := map[string]bool{}
-	add := func(n string) bool {
-		if seen[n] {
-			return false
-		}
-		seen[n] = true
-		out = append(out, n)
-		return len(out) >= max
+// caveatGroup is the prompt-shaped view of a CostDiff's notes,
+// partitioned so the LLM cannot accidentally attribute one resource's
+// caveat to another.
+//
+// The flat-list approach we used originally caused a real bug: a NAT
+// Gateway caveat ("data processing charges (~$0.045/GB) not modeled")
+// was attributed by the model to the RDS primary driver because the
+// prompt offered no resource-level binding. Grouping by resource and
+// labelling sub-blocks explicitly removes that ambiguity.
+type caveatGroup struct {
+	primaryAddress string
+	primaryNotes   []string
+	otherNotes     []resourceNote
+	planWideNotes  []string
+}
+
+// resourceNote pairs a per-resource caveat with the address it belongs
+// to so the prompt can render it as "{address}: {note}". The address
+// prefix is what tells the LLM "this caveat is for resource X, not the
+// primary driver".
+type resourceNote struct {
+	address string
+	note    string
+}
+
+// buildCaveatGroup partitions a CostDiff's notes into the three
+// sub-blocks the prompt expects. The primary driver is TopMovers[0]
+// when present (TopMovers is already sorted by absolute delta and
+// excludes Skipped); when TopMovers is empty there is no primary, and
+// every per-resource note ends up in "other".
+func buildCaveatGroup(d CostDiff) caveatGroup {
+	var g caveatGroup
+	g.planWideNotes = d.Notes
+
+	var primaryAddr string
+	if len(d.TopMovers) > 0 {
+		primaryAddr = d.TopMovers[0].ResourceAddress
+		g.primaryAddress = primaryAddr
+		g.primaryNotes = d.TopMovers[0].Notes
 	}
-	for _, n := range d.Notes {
-		if add(n) {
-			return out
-		}
-	}
+
 	for _, c := range d.Changes {
+		// An empty primaryAddr means "no primary driver", in which
+		// case we should not match changes that happen to have empty
+		// addresses against it — every change is "other" in that case.
+		if primaryAddr != "" && c.ResourceAddress == primaryAddr {
+			continue
+		}
 		for _, n := range c.Notes {
-			if add(n) {
-				return out
-			}
+			g.otherNotes = append(g.otherNotes, resourceNote{c.ResourceAddress, n})
 		}
 	}
-	return out
+	return g
+}
+
+// isEmpty reports whether the group has no notes at all. When true the
+// prompt omits the entire caveats section.
+func (g caveatGroup) isEmpty() bool {
+	return len(g.primaryNotes) == 0 && len(g.otherNotes) == 0 && len(g.planWideNotes) == 0
+}
+
+// writeCaveatsByResource emits the three caveat sub-blocks (primary,
+// other, plan-wide) into sb. Each sub-block is omitted independently
+// when its slice is empty; the section as a whole is omitted when all
+// three are empty.
+func writeCaveatsByResource(sb *strings.Builder, d CostDiff) {
+	g := buildCaveatGroup(d)
+	if g.isEmpty() {
+		return
+	}
+
+	if len(g.primaryNotes) > 0 {
+		fmt.Fprintf(sb, "# Notable assumptions for the primary driver (%s)\n", g.primaryAddress)
+		for _, n := range g.primaryNotes {
+			sb.WriteString("- ")
+			sb.WriteString(n)
+			sb.WriteByte('\n')
+		}
+		sb.WriteByte('\n')
+	}
+
+	if len(g.otherNotes) > 0 {
+		sb.WriteString("# Other notable assumptions (do NOT attribute to the primary driver)\n")
+		for _, rn := range g.otherNotes {
+			fmt.Fprintf(sb, "- %s: %s\n", rn.address, rn.note)
+		}
+		sb.WriteByte('\n')
+	}
+
+	if len(g.planWideNotes) > 0 {
+		sb.WriteString("# Plan-wide notes\n")
+		for _, n := range g.planWideNotes {
+			sb.WriteString("- ")
+			sb.WriteString(n)
+			sb.WriteByte('\n')
+		}
+		sb.WriteByte('\n')
+	}
 }
