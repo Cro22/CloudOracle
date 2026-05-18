@@ -13,6 +13,7 @@ type Config struct {
 	DB             DBConfig
 	Cloud          CloudConfig
 	LLM            LLMConfig
+	API            APIConfig
 	ServiceTimeout time.Duration
 	LogLevel       string
 	LogFormat      string
@@ -45,6 +46,17 @@ type LLMConfig struct {
 	MaxRetries     int
 	BaseDelay      time.Duration
 	MaxDelay       time.Duration
+}
+
+// APIConfig governs the HTTP server exposed by `oracle serve`. Key is read
+// here but not validated as required at Load time — only the `serve`
+// subcommand cares whether it is set, so we let other subcommands (seed,
+// analyze, report, ...) run without it. The serve entry point fails fast
+// if Key is empty.
+type APIConfig struct {
+	Key             string
+	Port            string
+	ShutdownTimeout time.Duration
 }
 
 const (
@@ -113,6 +125,11 @@ func Load() (Config, error) {
 			MaxRetries:     v.requireNonNegativeInt("LLM_MAX_RETRIES", 3),
 			BaseDelay:      v.requirePositiveDuration("LLM_BASE_DELAY", 500*time.Millisecond),
 			MaxDelay:       v.requirePositiveDuration("LLM_MAX_DELAY", 30*time.Second),
+		},
+		API: APIConfig{
+			Key:             os.Getenv("CLOUDORACLE_API_KEY"),
+			Port:            v.requirePort("CLOUDORACLE_API_PORT", "8080"),
+			ShutdownTimeout: v.requirePositiveDuration("CLOUDORACLE_API_SHUTDOWN_TIMEOUT", 10*time.Second),
 		},
 		ServiceTimeout: v.requirePositiveDuration("CLOUD_SERVICE_TIMEOUT", 30*time.Second),
 		LogLevel:       v.requireEnum("LOG_LEVEL", "info", validLogLevels),
