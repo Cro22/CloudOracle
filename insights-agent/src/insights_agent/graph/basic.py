@@ -18,6 +18,7 @@ domain-specific guidance.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -55,13 +56,17 @@ class AgentResult:
     messages: list[Any] = field(default_factory=list)
 
 
-def build_graph(llm: BaseChatModel, tools: list[BaseTool]) -> Any:
+def build_graph(llm: BaseChatModel, tools: Sequence[BaseTool]) -> Any:
     """Compile a ReAct agent bound to `tools`.
 
     We pass the system prompt as a `prompt` argument so it's prepended to
     every model call inside the graph (rather than baked into the input
     messages — that would make turn 2+ duplicate it)."""
-    return create_react_agent(model=llm, tools=tools, prompt=SystemMessage(content=SYSTEM_PROMPT))
+    return create_react_agent(
+        model=llm,
+        tools=list(tools),
+        prompt=SystemMessage(content=SYSTEM_PROMPT),
+    )
 
 
 async def ask(graph: Any, question: str) -> AgentResult:
