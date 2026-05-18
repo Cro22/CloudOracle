@@ -42,6 +42,12 @@ packages = ["src/insights_agent"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "--cov=insights_agent --cov-report=term-missing --cov-fail-under=80 -ra"
+filterwarnings = [
+    # `create_react_agent` is the explicit choice for sub-hito 8.1; the
+    # supervisor refactor in 8.4 replaces it. Silence the deprecation here
+    # so the warning doesn't drown out real signal in the test output.
+    "ignore::langgraph.warnings.LangGraphDeprecationWarning",
+]
 
 [tool.coverage.run]
 source = ["src/insights_agent"]
