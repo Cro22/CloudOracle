@@ -111,3 +111,53 @@ func TestListSnapshots_RespectsDayWindow(t *testing.T) {
 		t.Errorf("365-day window returned %d, want 1", len(got))
 	}
 }
+
+// TestListSnapshotsInRange_BothBoundsInclusive verifies the inclusive
+// [start, end] contract surfaced by the v1 HTTP API. Snapshots at the
+// exact start and end timestamps must be returned; one minute outside
+// must not. The dataset uses three snapshots backdated to known offsets
+// so we can reason about the bounds without flakiness.
+func TestListSnapshotsInRange_BothBoundsInclusive(t *testing.T) {
+	pool := dbtest.SharedPool(t)
+	ctx := t.Context()
+
+	// Three identical resources → three (account, service) rows; we then
+	// rewrite taken_at to put one inside, one at the lower edge, and one
+	// outside the test window.
+	resources := []shared.Resource{
+		{ID: "i-1", AccountID: "acc-a", Service: "ec2", ResourceType: "t3.micro", Region: "us-east-2", MonthlyCost: 10, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: "i-2", AccountID: "acc-b", Service: "rds", ResourceType: "db.t3.micro", Region: "us-east-2", MonthlyCost: 50, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+		{ID: "i-3", AccountID: "acc-c", Service: "ebs", ResourceType: "gp3", Region: "us-east-2", MonthlyCost: 5, CreatedAt: time.Now(), UpdatedAt: time.Now()},
+	}
+	if err := CreateSnapshot(ctx, pool, resources); err != nil {
+		t.Fatalf("CreateSnapshot: %v", err)
+	}
+
+	// Set fixed timestamps: ec2 at 2026-04-01 (inside), rds at 2026-04-30 (inside, at upper edge), ebs at 2026-05-15 (outside).
+	if _, err := pool.Exec(ctx, `UPDATE cost_snapshots SET taken_at = '2026-04-01 12:00:00+00' WHERE service = 'ec2'`); err != nil {
+		t.Fatalf("backdate ec2: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE cost_snapshots SET taken_at = '2026-04-30 23:59:59+00' WHERE service = 'rds'`); err != nil {
+		t.Fatalf("backdate rds: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE cost_snapshots SET taken_at = '2026-05-15 00:00:00+00' WHERE service = 'ebs'`); err != nil {
+		t.Fatalf("backdate ebs: %v", err)
+	}
+
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 4, 30, 23, 59, 59, 0, time.UTC)
+	got, err := ListSnapshotsInRange(ctx, pool, start, end)
+	if err != nil {
+		t.Fatalf("ListSnapshotsInRange: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2 (ec2 + rds; ebs is outside)", len(got))
+	}
+	services := map[string]bool{}
+	for _, s := range got {
+		services[s.Service] = true
+	}
+	if !services["ec2"] || !services["rds"] || services["ebs"] {
+		t.Errorf("unexpected services in range: %v", services)
+	}
+}

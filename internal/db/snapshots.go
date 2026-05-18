@@ -90,3 +90,33 @@ func ListSnapshots(ctx context.Context, pool *pgxpool.Pool, days int) ([]Snapsho
 
 	return snapshots, rows.Err()
 }
+
+// ListSnapshotsInRange returns every snapshot taken in [start, end]. Both
+// bounds are inclusive — the v1 HTTP API documents an inclusive contract,
+// and BETWEEN matches both ends. Used by the cost-summary / cost-by-service
+// endpoints; ListSnapshots stays as the "last N days" entry point used by
+// the trend CLI and dashboard.
+func ListSnapshotsInRange(ctx context.Context, pool *pgxpool.Pool, start, end time.Time) ([]Snapshot, error) {
+	rows, err := pool.Query(ctx,
+		`SELECT taken_at, account_id, service, resource_count, total_monthly_cost
+		 FROM cost_snapshots
+		 WHERE taken_at BETWEEN $1 AND $2
+		 ORDER BY taken_at ASC`,
+		start, end,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying snapshots in range: %w", err)
+	}
+	defer rows.Close()
+
+	var snapshots []Snapshot
+	for rows.Next() {
+		var s Snapshot
+		if err := rows.Scan(&s.TakenAt, &s.AccountID, &s.Service, &s.ResourceCount, &s.TotalMonthlyCost); err != nil {
+			return nil, fmt.Errorf("scanning snapshot: %w", err)
+		}
+		snapshots = append(snapshots, s)
+	}
+
+	return snapshots, rows.Err()
+}
