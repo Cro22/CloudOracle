@@ -8,7 +8,32 @@ A Go FinOps toolkit that ships in two modes from the same `oracle` binary, with 
 
 - **v1 — Audit existing cloud spend.** Ingest live EC2/RDS/EBS/Lambda inventory from AWS, GCP, or Azure into Postgres, run deterministic rules over it, and produce an executive PDF + dashboard with an LLM-narrated summary. See **[docs/v1-guide.md](docs/v1-guide.md)**.
 - **v2 — Predict cost impact of a Terraform PR before merge.** Read `terraform show -json plan.tfplan`, look every changing resource up against the AWS Pricing API, and post (or upsert) a Markdown comment on the PR with the net monthly delta, top movers, and a 1–3 sentence LLM narrative. Ships as a GitHub Action and as the `oracle pr-check` subcommand. **Current focus.** See **[docs/v2-guide.md](docs/v2-guide.md)**.
-- **v3 — Insights Agent (in progress).** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — LangGraph orchestration, RAG over FinOps documentation, multi-agent supervisor pattern, and production guardrails.
+- **v3 — Insights Agent (in progress).** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — LangGraph orchestration, RAG over FinOps documentation, multi-agent supervisor pattern, and production guardrails. See **[AI Insights Agent](#ai-insights-agent)** below and **[insights-agent/README.md](insights-agent/README.md)**.
+
+## AI Insights Agent
+
+A Python sibling of the Go server that lets you ask FinOps questions in
+natural language. The agent decides which `/api/v1` endpoint to call, fetches
+the data over HTTP, and answers in the user's language — surfacing the
+"snapshot approximation" caveat when accuracy matters.
+
+```mermaid
+flowchart LR
+    U([User]) -->|"¿Cuánto gasté en AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
+    CLI --> G[LangGraph<br/>create_react_agent]
+    G -->|"bind_tools"| LLM[Gemini 2.5 Flash]
+    LLM -->|"tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service]
+    T -->|"GET /api/v1/* + X-API-Key"| GO[CloudOracle Go<br/>oracle serve]
+    GO -->|"SQL"| DB[(PostgreSQL<br/>cost_snapshots)]
+    GO -->|"data_source: snapshots_approximation"| T
+    T --> LLM
+    LLM -->|"natural-language answer"| CLI
+    CLI --> U
+```
+
+Sub-hito 8.1 (single-turn, two tools, Gemini, no RAG) is the first end-to-end
+round-trip. Setup, env vars, CLI usage, and the smoke test are documented in
+**[insights-agent/README.md](insights-agent/README.md)**.
 
 ## v2 — Quick start (current focus)
 
@@ -99,7 +124,13 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 ## Roadmap
 
 ### v3 — Insights Agent (in progress)
-- [ ] Polyglot Go + Python extension adding agentic FinOps analysis (LangGraph orchestration, RAG over FinOps docs, multi-agent supervisor, production guardrails) on top of v1/v2 cost data
+- [x] **Sub-hito 8.0** — Authenticated `/api/v1/cost-summary` and `/api/v1/cost-by-service` Go endpoints (X-API-Key, snapshot-derived totals with explicit `data_source` disclaimer, machine-readable error codes)
+- [x] **Sub-hito 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
+- [ ] **Sub-hito 8.2** — Additional tools (resources, findings, trends) wired against the v0 dashboard endpoints
+- [ ] **Sub-hito 8.3** — pgvector + RAG over FinOps documentation
+- [ ] **Sub-hito 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
+- [ ] **Sub-hito 8.5** — Production guardrails: cost caps, fallback determinístico, semantic answer validation, HTTP API surface
+- [ ] **Sub-hito 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation
 
 ### v2 — Terraform PR cost analysis
 - [x] Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op) and `after_unknown` handling
