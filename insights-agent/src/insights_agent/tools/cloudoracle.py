@@ -25,7 +25,7 @@ from typing import Any
 
 import httpx
 import structlog
-from langchain_core.tools import StructuredTool
+from langchain_core.tools import StructuredTool, ToolException
 
 logger = structlog.get_logger(__name__)
 
@@ -180,9 +180,14 @@ class CloudOracleClient:
 def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
     """Wrap the client methods as LangChain `StructuredTool`s.
 
-    We pass an explicit `name` and `description` (and rely on Pydantic to
-    infer the args schema from type hints) so the LLM gets a clean signature
-    plus the rich docstring we hand-tuned for tool-selection accuracy.
+    The wrappers translate `CloudOracleAPIError` / `CloudOracleTransportError`
+    / `ValueError` into `ToolException`. `ToolException` is the canonical
+    "this tool failed but the agent should keep going" signal — LangGraph's
+    ToolNode catches it and surfaces the message back to the LLM as a tool
+    observation, so the model can either retry with corrected args or
+    explain the failure to the user. Letting the original RuntimeError
+    propagate would abort the whole graph run, which is the wrong UX for
+    a transient 5xx or a malformed date.
     """
 
     async def _summary(
@@ -190,7 +195,10 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         end: str,
         providers: list[str] | None = None,
     ) -> dict[str, Any]:
-        return await client.cost_summary(start, end, providers)
+        try:
+            return await client.cost_summary(start, end, providers)
+        except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
+            raise ToolException(str(e)) from e
 
     async def _by_service(
         start: str,
@@ -198,17 +206,22 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         provider: str,
         top: int = 10,
     ) -> dict[str, Any]:
-        return await client.cost_by_service(start, end, provider, top)
+        try:
+            return await client.cost_by_service(start, end, provider, top)
+        except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
+            raise ToolException(str(e)) from e
 
     summary_tool = StructuredTool.from_function(
         coroutine=_summary,
         name="cloudoracle_cost_summary",
         description=_COST_SUMMARY_DESC,
+        handle_tool_error=True,
     )
     by_service_tool = StructuredTool.from_function(
         coroutine=_by_service,
         name="cloudoracle_cost_by_service",
         description=_COST_BY_SERVICE_DESC,
+        handle_tool_error=True,
     )
     return [summary_tool, by_service_tool]
 
