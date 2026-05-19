@@ -1,8 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-469%20unit%20%2B%2021%20integration-brightgreen)
-![Go Version](https://img.shields.io/badge/go-1.25-blue)
-![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
+![Tests](https://img.shields.io/badge/tests-469%20unit%20%2B%2021%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
 A Go FinOps toolkit that ships in two modes from the same `oracle` binary, with a polyglot agent extension in progress:
 
@@ -19,7 +17,7 @@ the data over HTTP, and answers in the user's language — surfacing the
 
 ```mermaid
 flowchart LR
-    U([User]) -->|"¿Cuánto gasté en AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
+    U([User]) -->|"How much did I spend on AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
     CLI --> G[LangGraph<br/>create_react_agent]
     G -->|"bind_tools"| LLM[Gemini 2.5 Flash]
     LLM -->|"tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service]
@@ -31,7 +29,7 @@ flowchart LR
     CLI --> U
 ```
 
-Sub-hito 8.1 (single-turn, two tools, Gemini, no RAG) is the first end-to-end
+Milestone 8.1 (single-turn, two tools, Gemini, no RAG) is the first end-to-end
 round-trip. Setup, env vars, CLI usage, and the smoke test are documented in
 **[insights-agent/README.md](insights-agent/README.md)**.
 
@@ -40,16 +38,19 @@ round-trip. Setup, env vars, CLI usage, and the smoke test are documented in
 CloudOracle parses a Terraform plan, prices every changing resource, and posts a PR comment like this:
 
 > ## 💰 Cloud Cost Impact
+>
 > **Net monthly change: +$389.35** 🔴
 >
 > The Aurora cluster instance dominates this change at ~$204/month — over half the total. If this is intended for a non-production environment, an `aws_db_instance` running `db.t3.medium` would land around $60/mo for similar functional coverage.
 >
 > ### Top movers by cost impact
-> | Resource | Action | Δ Monthly | Confidence |
-> | -------- | ------ | --------- | ---------- |
-> | `aws_rds_cluster_instance.aurora` | 🆕 create | +$204.40 | low |
-> | `aws_db_instance.db` | 🆕 create | +$71.36 | low |
-> | `aws_instance.web` | 🆕 create | +$64.74 | low |
+>
+>
+> | Resource                          | Action    | Δ Monthly | Confidence |
+> | --------------------------------- | --------- | ---------- | ---------- |
+> | `aws_rds_cluster_instance.aurora` | 🆕 create | +$204.40   | low        |
+> | `aws_db_instance.db`              | 🆕 create | +$71.36    | low        |
+> | `aws_instance.web`                | 🆕 create | +$64.74    | low        |
 
 Drop this workflow into `.github/workflows/cost-comment.yml`:
 
@@ -97,20 +98,21 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 
 ## Tech Stack
 
-| Component    | Technology                         |
-|-------------|-------------------------------------|
-| Language    | Go 1.25                             |
-| Database    | PostgreSQL 16 (Alpine)              |
-| DB Driver   | pgx v5 (connection pool)            |
-| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS) |
-| GCP SDK     | Google Cloud Go (Compute, SQL, Functions) |
+
+| Component   | Technology                                   |
+| ----------- | -------------------------------------------- |
+| Language    | Go 1.25                                      |
+| Database    | PostgreSQL 16 (Alpine)                       |
+| DB Driver   | pgx v5 (connection pool)                     |
+| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS)        |
+| GCP SDK     | Google Cloud Go (Compute, SQL, Functions)    |
 | Azure SDK   | Azure SDK for Go (Compute, SQL, App Service) |
-| Concurrency | `golang.org/x/sync/errgroup`        |
-| Logging     | `log/slog` (structured, text/JSON)  |
-| PDF         | go-pdf/fpdf                         |
-| LLM         | Gemini / Claude / OpenAI            |
-| Testing     | `testing` + `httptest`              |
-| Containers  | Docker Compose + multi-stage Dockerfile |
+| Concurrency | `golang.org/x/sync/errgroup`                 |
+| Logging     | `log/slog` (structured, text/JSON)           |
+| PDF         | go-pdf/fpdf                                  |
+| LLM         | Gemini / Claude / OpenAI                     |
+| Testing     | `testing` + `httptest`                       |
+| Containers  | Docker Compose + multi-stage Dockerfile      |
 
 ## Documentation
 
@@ -124,40 +126,43 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 ## Roadmap
 
 ### v3 — Insights Agent (in progress)
-- [x] **Sub-hito 8.0** — Authenticated `/api/v1/cost-summary` and `/api/v1/cost-by-service` Go endpoints (X-API-Key, snapshot-derived totals with explicit `data_source` disclaimer, machine-readable error codes)
-- [x] **Sub-hito 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
-- [ ] **Sub-hito 8.2** — Additional tools (resources, findings, trends) wired against the v0 dashboard endpoints
-- [ ] **Sub-hito 8.3** — pgvector + RAG over FinOps documentation
-- [ ] **Sub-hito 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
-- [ ] **Sub-hito 8.5** — Production guardrails: cost caps, fallback determinístico, semantic answer validation, HTTP API surface
-- [ ] **Sub-hito 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation
+
+- [X]  **Milestone 8.0** — Authenticated `/api/v1/cost-summary` and `/api/v1/cost-by-service` Go endpoints (X-API-Key, snapshot-derived totals with explicit `data_source` disclaimer, machine-readable error codes)
+- [X]  **Milestone 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
+- [ ]  **Milestone 8.2** — Additional tools (resources, findings, trends) wired against the v0 dashboard endpoints
+- [ ]  **Milestone 8.3** — pgvector + RAG over FinOps documentation
+- [ ]  **Milestone 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
+- [ ]  **Milestone 8.5** — Production guardrails: cost caps, deterministic fallback, semantic answer validation, HTTP API surface
+- [ ]  **Milestone 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation
 
 ### v2 — Terraform PR cost analysis
-- [x] Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op) and `after_unknown` handling
-- [x] AWS Pricing API client + cache — `internal/pricing.Client` wraps AWS SDK v2 `pricing:GetProducts`; `internal/pricing.Cache` adds a 7-day disk cache keyed by service+filters
-- [x] Per-resource estimators — EC2, EBS, RDS, Aurora cluster instance, Lambda, NAT gateway with breakdown line items and assumption notes
-- [x] CostDiff aggregator — `internal/diff.Analyze` collapses per-resource estimates into a plan-wide picture with Created / Deleted / Updated / Replaced / Skipped slices, top movers, and aggregate confidence
-- [x] Markdown renderer — `internal/diff.RenderMarkdown` produces the canonical PR comment (header / top movers table / full breakdown / caveats / marker footer), templated and golden-tested
-- [x] LLM-narrated PR comment — `RenderMarkdownWithLLM` swaps the templated narrative for a 1–3 sentence LLM output with caveat grouping, sanity checks (length cap, preamble strip, paragraph-break warn), and silent fallback to the templated text on any failure
-- [x] GitHub REST client — `internal/github.PostOrUpdateComment` lists, finds-by-marker, and PATCHes / POSTs; paginated with cap, body truncation guard at 60KB, multi-match resolution to most-recently-updated
-- [x] `oracle pr-check` subcommand — orchestrates the whole pipeline, with differentiated exit codes (1 input / 2 pricing / 3 output / 4 github) and `--no-llm` / `--post` switches
-- [x] GitHub Action packaging — `Dockerfile.action`, `action.yml`, POSIX `entrypoint.sh` that auto-extracts the PR number from `GITHUB_REF` on `pull_request[_target]` events; reference workflows under `.github/examples/`
+
+- [X]  Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op) and `after_unknown` handling
+- [X]  AWS Pricing API client + cache — `internal/pricing.Client` wraps AWS SDK v2 `pricing:GetProducts`; `internal/pricing.Cache` adds a 7-day disk cache keyed by service+filters
+- [X]  Per-resource estimators — EC2, EBS, RDS, Aurora cluster instance, Lambda, NAT gateway with breakdown line items and assumption notes
+- [X]  CostDiff aggregator — `internal/diff.Analyze` collapses per-resource estimates into a plan-wide picture with Created / Deleted / Updated / Replaced / Skipped slices, top movers, and aggregate confidence
+- [X]  Markdown renderer — `internal/diff.RenderMarkdown` produces the canonical PR comment (header / top movers table / full breakdown / caveats / marker footer), templated and golden-tested
+- [X]  LLM-narrated PR comment — `RenderMarkdownWithLLM` swaps the templated narrative for a 1–3 sentence LLM output with caveat grouping, sanity checks (length cap, preamble strip, paragraph-break warn), and silent fallback to the templated text on any failure
+- [X]  GitHub REST client — `internal/github.PostOrUpdateComment` lists, finds-by-marker, and PATCHes / POSTs; paginated with cap, body truncation guard at 60KB, multi-match resolution to most-recently-updated
+- [X]  `oracle pr-check` subcommand — orchestrates the whole pipeline, with differentiated exit codes (1 input / 2 pricing / 3 output / 4 github) and `--no-llm` / `--post` switches
+- [X]  GitHub Action packaging — `Dockerfile.action`, `action.yml`, POSIX `entrypoint.sh` that auto-extracts the PR number from `GITHUB_REF` on `pull_request[_target]` events; reference workflows under `.github/examples/`
 
 ### v1 — Cloud cost audit
-- [x] LLM-powered analysis: executive summaries generated by Gemini / Claude / OpenAI
-- [x] PDF report generation with executive summary and severity-coded tables
-- [x] Real AWS integration via SDK (EC2, RDS, EBS, Lambda with STS validation and graceful degradation)
-- [x] Multi-cloud support (GCP, Azure) with Compute, SQL, Disks, and Functions for each provider
-- [x] Cost trend tracking over time (automatic snapshots on seed + `trend` command)
-- [x] Parallel fetch with `errgroup` and per-service `context.WithTimeout`
-- [x] Structured logging with `log/slog` (text or JSON output, level-configurable)
-- [x] Centralized configuration loaded once and injected as typed structs
-- [x] Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
-- [x] Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
-- [x] SDK-client interfaces for real-provider unit tests — every provider fetcher (AWS / GCP / Azure) is exercised against fake SDK clients, covering pagination, per-service errors, and graceful degradation
-- [x] Fail-fast configuration validation — `config.Load() (Config, error)` accumulates every invalid env var into a single readable error, with cross-field rules (provider=gcp without `GOOGLE_CLOUD_PROJECT`, `LLM_PROVIDER=claude` without `ANTHROPIC_API_KEY`, etc.)
-- [x] Resilient LLM HTTP layer — shared `RoundTripper` retries 429/5xx/network errors with exponential-backoff-with-full-jitter, honors `Retry-After`, replays request bodies, cancellable via context
-- [x] testcontainers-based integration tests — real Postgres 16 in Docker via `testcontainers-go`, gated by `//go:build integration`, with a full seed → analyze E2E test and a GitHub Actions workflow that runs both unit and integration tiers
+
+- [X]  LLM-powered analysis: executive summaries generated by Gemini / Claude / OpenAI
+- [X]  PDF report generation with executive summary and severity-coded tables
+- [X]  Real AWS integration via SDK (EC2, RDS, EBS, Lambda with STS validation and graceful degradation)
+- [X]  Multi-cloud support (GCP, Azure) with Compute, SQL, Disks, and Functions for each provider
+- [X]  Cost trend tracking over time (automatic snapshots on seed + `trend` command)
+- [X]  Parallel fetch with `errgroup` and per-service `context.WithTimeout`
+- [X]  Structured logging with `log/slog` (text or JSON output, level-configurable)
+- [X]  Centralized configuration loaded once and injected as typed structs
+- [X]  Export findings to JSON/CSV (stdout or file, RFC 4180 escaping, pipeline-friendly)
+- [X]  Web dashboard with cost visualizations (React + Recharts + Tailwind v4, embedded in the Go binary via `go:embed`, served by `oracle serve`)
+- [X]  SDK-client interfaces for real-provider unit tests — every provider fetcher (AWS / GCP / Azure) is exercised against fake SDK clients, covering pagination, per-service errors, and graceful degradation
+- [X]  Fail-fast configuration validation — `config.Load() (Config, error)` accumulates every invalid env var into a single readable error, with cross-field rules (provider=gcp without `GOOGLE_CLOUD_PROJECT`, `LLM_PROVIDER=claude` without `ANTHROPIC_API_KEY`, etc.)
+- [X]  Resilient LLM HTTP layer — shared `RoundTripper` retries 429/5xx/network errors with exponential-backoff-with-full-jitter, honors `Retry-After`, replays request bodies, cancellable via context
+- [X]  testcontainers-based integration tests — real Postgres 16 in Docker via `testcontainers-go`, gated by `//go:build integration`, with a full seed → analyze E2E test and a GitHub Actions workflow that runs both unit and integration tiers
 
 ## License
 

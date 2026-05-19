@@ -110,8 +110,8 @@ async def test_graph_invokes_summary_tool_then_returns_answer(
             # Turn 2: deliver a final answer that references the snapshot caveat.
             AIMessage(
                 content=(
-                    "Gastaste aproximadamente $150 en AWS en abril 2026 "
-                    "(aproximación basada en snapshots, no factura final)."
+                    "You spent approximately $150 on AWS in April 2026 "
+                    "(snapshots-based approximation, not the final bill)."
                 )
             ),
         ]
@@ -119,7 +119,7 @@ async def test_graph_invokes_summary_tool_then_returns_answer(
     tools = build_tools(client)
     graph = build_graph(model, tools)
 
-    result = await ask(graph, "¿Cuánto gasté en AWS en abril de 2026?")
+    result = await ask(graph, "How much did I spend on AWS in April 2026?")
 
     assert len(result.tool_calls) == 1
     assert result.tool_calls[0]["name"] == "cloudoracle_cost_summary"

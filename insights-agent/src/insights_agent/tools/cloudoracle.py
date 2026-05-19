@@ -7,7 +7,7 @@ The Go API exposes two snapshot-derived cost endpoints behind `X-API-Key`:
 
 Both return a `data_source` field tagging the response as
 `"snapshots_approximation"` until the real billing-API integration lands
-(sub-hito 8.7). The tool docstrings tell the LLM to surface that caveat to
+(milestone 8.7). The tool docstrings tell the LLM to surface that caveat to
 the user — `note` carries the long-form disclaimer text the Go side curates.
 
 Errors are propagated as exceptions. LangGraph's ReAct loop catches them

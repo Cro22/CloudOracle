@@ -7,18 +7,18 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
-// TestMapEC2ToResource verifica que mapEC2ToResource mapea correctamente
-// cada campo de una ec2types.Instance a un shared.Resource.
-// Usamos un struct literal del SDK como "mock" — no necesitamos un cliente
-// real ni llamadas de red porque mapEC2ToResource es una funcion pura.
+// TestMapEC2ToResource verifies that mapEC2ToResource maps every field of
+// an ec2types.Instance to a shared.Resource correctly.
+// We use an SDK struct literal as a "mock" — no real client or network
+// calls are needed because mapEC2ToResource is a pure function.
 func TestMapEC2ToResource(t *testing.T) {
 	launchTime := time.Date(2026, 4, 12, 19, 12, 46, 0, time.UTC)
 	instanceID := "i-0d76ebf46c06e285d"
 	tagKey := "Name"
 	tagValue := "cloudoracle-test"
 
-	// Armamos una instancia EC2 con los mismos campos que devolveria la API.
-	// Los punteros a string son necesarios porque el SDK usa *string en todos lados.
+	// Build an EC2 instance with the same fields the API would return.
+	// String pointers are required because the SDK uses *string everywhere.
 	instance := ec2types.Instance{
 		InstanceId:   &instanceID,
 		InstanceType: ec2types.InstanceTypeT3Micro,
@@ -30,8 +30,8 @@ func TestMapEC2ToResource(t *testing.T) {
 
 	r := mapEC2ToResource(instance, "505610409129", "us-east-2")
 
-	// Verificamos cada campo individualmente en vez de usar reflect.DeepEqual
-	// porque asi el mensaje de error dice exactamente que campo fallo.
+	// Verify each field individually instead of using reflect.DeepEqual so
+	// the error message points at exactly which field failed.
 	if r.ID != "i-0d76ebf46c06e285d" {
 		t.Errorf("ID = %q, want %q", r.ID, "i-0d76ebf46c06e285d")
 	}
@@ -61,8 +61,8 @@ func TestMapEC2ToResource(t *testing.T) {
 	}
 }
 
-// TestMapEC2ToResource_NoTags verifica que una instancia sin tags
-// produce un Resource con Tags == nil (no un map vacio).
+// TestMapEC2ToResource_NoTags verifies that an instance with no tags
+// produces a Resource with Tags == nil (not an empty map).
 func TestMapEC2ToResource_NoTags(t *testing.T) {
 	launchTime := time.Now()
 	instanceID := "i-notags"
@@ -71,7 +71,7 @@ func TestMapEC2ToResource_NoTags(t *testing.T) {
 		InstanceId:   &instanceID,
 		InstanceType: ec2types.InstanceTypeM5Large,
 		LaunchTime:   &launchTime,
-		Tags:         nil, // sin tags
+		Tags:         nil, // no tags
 	}
 
 	r := mapEC2ToResource(instance, "123456789", "eu-west-1")
@@ -84,8 +84,8 @@ func TestMapEC2ToResource_NoTags(t *testing.T) {
 	}
 }
 
-// TestMapEC2ToResource_MultipleTags verifica que multiples tags
-// se convierten correctamente al map.
+// TestMapEC2ToResource_MultipleTags verifies that multiple tags are
+// correctly converted into the map.
 func TestMapEC2ToResource_MultipleTags(t *testing.T) {
 	launchTime := time.Now()
 	instanceID := "i-multitags"
@@ -120,12 +120,12 @@ func TestMapEC2ToResource_MultipleTags(t *testing.T) {
 	}
 }
 
-// TestConvertEC2Tags_NilValue verifica que un tag con Value == nil
-// se convierte a string vacio en vez de paniquear.
+// TestConvertEC2Tags_NilValue verifies that a tag with Value == nil is
+// converted to an empty string instead of panicking.
 func TestConvertEC2Tags_NilValue(t *testing.T) {
 	key := "AutoScalingGroup"
 	tags := []ec2types.Tag{
-		{Key: &key, Value: nil}, // AWS a veces devuelve tags con Value nil
+		{Key: &key, Value: nil}, // AWS sometimes returns tags with Value nil
 	}
 
 	result := convertEC2Tags(tags)
@@ -135,23 +135,23 @@ func TestConvertEC2Tags_NilValue(t *testing.T) {
 	}
 }
 
-// TestParseLambdaTimestamp verifica los distintos formatos que Lambda puede devolver.
+// TestParseLambdaTimestamp verifies the different formats Lambda may return.
 func TestParseLambdaTimestamp(t *testing.T) {
-	// Formato principal de Lambda: "2024-01-15T10:30:00.000+0000"
+	// Lambda's primary format: "2024-01-15T10:30:00.000+0000"
 	ts1 := "2024-01-15T10:30:00.000+0000"
 	result := parseLambdaTimestamp(&ts1)
 	if result.Year() != 2024 || result.Month() != 1 || result.Day() != 15 {
 		t.Errorf("Lambda format: got %v, want 2024-01-15", result)
 	}
 
-	// Formato RFC3339 estándar
+	// Standard RFC3339 format
 	ts2 := "2024-06-20T14:00:00Z"
 	result = parseLambdaTimestamp(&ts2)
 	if result.Year() != 2024 || result.Month() != 6 || result.Day() != 20 {
 		t.Errorf("RFC3339 format: got %v, want 2024-06-20", result)
 	}
 
-	// nil devuelve time.Now() (no paniquea)
+	// nil returns time.Now() (does not panic)
 	result = parseLambdaTimestamp(nil)
 	if time.Since(result) > time.Second {
 		t.Errorf("nil input should return ~now, got %v", result)

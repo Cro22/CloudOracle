@@ -5,33 +5,33 @@ LangGraph-based FinOps insights agent for CloudOracle. Ask in natural language
 `/api/v1` calls against the CloudOracle Go server, then answers in the same
 language with the relevant caveats.
 
-This is the first round-trip of sub-hito 8.1: single-turn agent (no
+This is the first round-trip of milestone 8.1: single-turn agent (no
 conversational memory), `create_react_agent` from `langgraph.prebuilt`, two
 tools wired against the Go cost endpoints, Gemini as the model. Future
-sub-hitos replace the ReAct loop with a custom supervisor (8.4) and add
+milestones replace the ReAct loop with a custom supervisor (8.4) and add
 RAG over FinOps docs (8.3).
 
 ## What it talks to
 
 ```
-┌────────┐   "¿Cuánto gasté en AWS?"   ┌─────────────┐
-│  User  │ ─────────────────────────▶  │ insights-   │
-└────────┘                             │ agent (CLI) │
-                                       └──────┬──────┘
-                                              │ LangGraph (Gemini)
-                                              │ tool call →
-                                              ▼
-                                       ┌─────────────┐  X-API-Key
-                                       │  Go server  │ ──────────▶ Postgres
-                                       │ /api/v1/... │            (cost_snapshots)
-                                       └─────────────┘
+┌────────┐  "How much did I spend on AWS?"  ┌─────────────┐
+│  User  │ ───────────────────────────────▶ │ insights-   │
+└────────┘                                  │ agent (CLI) │
+                                            └──────┬──────┘
+                                                   │ LangGraph (Gemini)
+                                                   │ tool call →
+                                                   ▼
+                                            ┌─────────────┐  X-API-Key
+                                            │  Go server  │ ──────────▶ Postgres
+                                            │ /api/v1/... │            (cost_snapshots)
+                                            └─────────────┘
 ```
 
 The two tools both return a `data_source` field. While it equals
 `"snapshots_approximation"`, the figures come from periodic CloudOracle
 snapshots — **not** a real billing API. The agent surfaces that caveat
 to the user when accuracy materially affects the answer. The real billing
-integration lands in sub-hito 8.7.
+integration lands in milestone 8.7.
 
 ## Setup in under 10 minutes
 
@@ -75,7 +75,7 @@ Required env vars (loaded by `pydantic-settings`, fail-fast at startup):
 ### 4 — Run the CLI
 
 ```bash
-uv run python -m insights_agent.main "¿Cuánto gasté en AWS en abril de 2026?"
+uv run python -m insights_agent.main "How much did I spend on AWS in April 2026?"
 ```
 
 Or via the console script entry point:
@@ -129,7 +129,7 @@ the unit tests already cover the pipeline with a mocked model.
 2. **Run the agent** from `insights-agent/`:
 
    ```bash
-   uv run insights-agent --verbose "¿Cuánto gasté en AWS en abril de 2026?"
+   uv run insights-agent --verbose "How much did I spend on AWS in April 2026?"
    ```
 
 3. **Expected output** (shape, not exact wording — Gemini paraphrases):
@@ -170,17 +170,17 @@ ReAct loop deterministically — including the tool-error branch.
 | ------------------- | ------------- | --- |
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
 | Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the two methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
-| Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Sub-hito 8.4 replaces this with a hand-rolled supervisor. |
+| Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Milestone 8.4 replaces this with a hand-rolled supervisor. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |
 | Logging             | `src/insights_agent/logging.py` | `structlog` matching the Go side's `slog` output (text or JSON to stderr) so a tail of both streams reads coherently. |
 
-### What is **not** in this sub-hito
+### What is **not** in this milestone
 
-- More tools (sub-hito 8.2)
+- More tools (milestone 8.2)
 - pgvector / RAG over FinOps docs (8.3)
 - Custom supervisor / multi-agent (8.4)
-- Cost caps, semantic answer validation, fallback determinístico (8.5)
+- Cost caps, semantic answer validation, deterministic fallback (8.5)
 - HTTP API surface for the agent — CLI only until 8.5
 - Other LLM providers (Anthropic, OpenAI)
 - Streaming responses
