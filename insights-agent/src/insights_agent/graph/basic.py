@@ -1,7 +1,7 @@
 """Basic ReAct graph: question → tool call(s) → natural-language answer.
 
 Uses `langgraph.prebuilt.create_react_agent` for the first end-to-end
-round-trip. Sub-hito 8.4 will replace this with a hand-rolled supervisor
+round-trip. Milestone 8.4 will replace this with a hand-rolled supervisor
 pattern; until then, `create_react_agent` gives us:
 
   - A tool-aware LLM call (bind_tools is invoked under the hood).

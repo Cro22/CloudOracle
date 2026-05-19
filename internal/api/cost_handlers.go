@@ -17,7 +17,7 @@ import (
 // endpoints. CloudOracle's `cost_snapshots` table records each provider's
 // *projected monthly cost rate* at snapshot time — not the historical spend
 // that a real Billing / Cost Explorer integration would surface. Until that
-// integration lands (sub-hito 8.2+), the v1 endpoints expose this
+// integration lands (milestone 8.2+), the v1 endpoints expose this
 // approximation explicitly in every response so downstream agents and
 // dashboards can present the right disclaimer to the user.
 const (
