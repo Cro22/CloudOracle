@@ -28,8 +28,8 @@ from langchain_core.tools import BaseTool
 from pydantic import ValidationError
 
 from insights_agent.config import Settings
-from insights_agent.graph.basic import AgentResult
-from insights_agent.graph.supervisor import ask_supervisor, build_supervisor_graph
+from insights_agent.graph.supervisor import build_supervisor_graph
+from insights_agent.guardrails.runner import GuardedResult, run_guarded
 from insights_agent.llm import GeminiProvider
 from insights_agent.logging import get_logger, setup
 from insights_agent.tools.cloudoracle import CloudOracleClient, build_tools
@@ -98,7 +98,7 @@ def _maybe_build_knowledge_tool(settings: Settings, log: Any) -> BaseTool | None
     return build_knowledge_tool(retriever)
 
 
-async def _run(query: str, *, as_json: bool, verbose: bool) -> AgentResult:
+async def _run(query: str, *, as_json: bool, verbose: bool) -> GuardedResult:
     # pydantic-settings populates required fields from the environment;
     # mypy's call-arg check doesn't understand env-based construction
     # without the pydantic plugin, so we silence it locally.
@@ -116,6 +116,7 @@ async def _run(query: str, *, as_json: bool, verbose: bool) -> AgentResult:
         api_key=settings.gemini_api_key,
         model=settings.gemini_model,
     )
+    chat_model = provider.get_chat_model()
     async with CloudOracleClient(
         base_url=settings.cloudoracle_base_url,
         api_key=settings.cloudoracle_api_key,
@@ -125,19 +126,43 @@ async def _run(query: str, *, as_json: bool, verbose: bool) -> AgentResult:
         knowledge_tool = _maybe_build_knowledge_tool(settings, log)
         if knowledge_tool is not None:
             tools.append(knowledge_tool)
-        graph = build_supervisor_graph(provider.get_chat_model(), tools)
-        result = await ask_supervisor(graph, query)
+        graph = build_supervisor_graph(chat_model, tools, settings.run_limits)
+        result = await run_guarded(
+            graph,
+            query,
+            validate=settings.enable_answer_validation,
+            judge_model=chat_model if settings.enable_llm_judge else None,
+        )
 
+    if result.fallback_used:
+        log.warning("fallback_used", error=result.error, validation=_validation_dict(result))
     if verbose and result.tool_calls:
         print("Tool calls made:", file=sys.stderr)
         for i, call in enumerate(result.tool_calls, 1):
             print(f"  {i}. {call['name']}({call['args']})", file=sys.stderr)
 
     if as_json:
-        print(json.dumps({"answer": result.answer, "tool_calls": result.tool_calls}, ensure_ascii=False))
+        print(
+            json.dumps(
+                {
+                    "answer": result.answer,
+                    "tool_calls": result.tool_calls,
+                    "fallback_used": result.fallback_used,
+                    "validation": _validation_dict(result),
+                },
+                ensure_ascii=False,
+            )
+        )
     else:
         print(result.answer)
     return result
+
+
+def _validation_dict(result: GuardedResult) -> dict[str, Any] | None:
+    v = result.validation
+    if v is None:
+        return None
+    return {"valid": v.valid, "layer": v.layer, "reason": v.reason}
 
 
 def cli_entrypoint(argv: list[str] | None = None) -> int:

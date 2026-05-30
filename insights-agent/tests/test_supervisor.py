@@ -21,10 +21,10 @@ from langchain_core.vectorstores import InMemoryVectorStore
 from pydantic import Field
 from pytest_httpx import HTTPXMock
 
-from insights_agent.graph import supervisor as sup
 from insights_agent.graph.supervisor import (
     COST_ANALYST,
     FINISH,
+    RunLimits,
     _run_react,
     _to_text,
     ask_supervisor,
@@ -176,12 +176,9 @@ async def test_offscope_finishes_without_a_worker(client: CloudOracleClient) -> 
     await client.aclose()
 
 
-async def test_hop_cap_forces_synthesis(
-    client: CloudOracleClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_hop_cap_forces_synthesis(client: CloudOracleClient) -> None:
     # Supervisor that never says finish: always routes to cost_analyst, whose
     # worker answers without a tool. The hop cap must end the loop at synthesis.
-    monkeypatch.setattr(sup, "MAX_HOPS", 2)
     model = ScriptedChatModel(
         script=[
             _route(COST_ANALYST),
@@ -192,10 +189,37 @@ async def test_hop_cap_forces_synthesis(
             _say("final synthesized answer"),
         ]
     )
-    graph = build_supervisor_graph(model, build_tools(client))
+    graph = build_supervisor_graph(model, build_tools(client), RunLimits(max_hops=2))
 
     result = await ask_supervisor(graph, "loop forever?")
     assert result.answer == "final synthesized answer"
+    await client.aclose()
+
+
+async def test_tool_call_budget_forces_synthesis(
+    client: CloudOracleClient, httpx_mock: HTTPXMock
+) -> None:
+    # max_tool_calls=1: after the cost_analyst makes one tool call, the
+    # supervisor must stop dispatching workers and synthesize.
+    httpx_mock.add_response(json=SUMMARY_PAYLOAD)
+    model = ScriptedChatModel(
+        script=[
+            _route(COST_ANALYST),
+            _call("cloudoracle_cost_summary", {"start": "2026-04-01", "end": "2026-04-30"}),
+            _say("AWS ~$150."),
+            _route(COST_ANALYST),  # supervisor wants more, but budget is spent
+            _say("final answer with $150"),  # forced synthesis
+        ]
+    )
+    graph = build_supervisor_graph(
+        model, build_tools(client), RunLimits(max_tool_calls=1)
+    )
+
+    result = await ask_supervisor(graph, "spend?")
+    assert len(result.tool_calls) == 1
+    assert "$150" in result.answer
+    # The observation was captured for grounding.
+    assert result.observations and result.observations[0]["name"] == "cloudoracle_cost_summary"
     await client.aclose()
 
 
@@ -204,15 +228,18 @@ class TestRunReact:
         model = ScriptedChatModel(
             script=[_call("nope", {}), _say("done after observing the error")]
         )
-        answer, calls = await _run_react(model, [], "system", [])
+        answer, calls, observations = await _run_react(model, [], "system", [])
         assert answer == "done after observing the error"
         assert calls == [{"name": "nope", "args": {}}]
+        # An unknown tool produces no grounded observation.
+        assert observations == []
 
     async def test_direct_answer_without_tools(self) -> None:
         model = ScriptedChatModel(script=[_say("just an answer")])
-        answer, calls = await _run_react(model, [], "system", [])
+        answer, calls, observations = await _run_react(model, [], "system", [])
         assert answer == "just an answer"
         assert calls == []
+        assert observations == []
 
 
 class TestToText:
