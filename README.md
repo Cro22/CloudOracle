@@ -20,22 +20,27 @@ flowchart LR
     U([User]) -->|"How much did I spend on AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
     CLI --> G[LangGraph<br/>create_react_agent]
     G -->|"bind_tools"| LLM[Gemini 2.5 Flash]
-    LLM -->|"tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations / cost-trends / inventory]
+    LLM -->|"HTTP tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations / cost-trends / inventory]
     T -->|"GET /api/v1/* + X-API-Key"| GO[CloudOracle Go<br/>oracle serve]
     GO -->|"SQL"| DB[(PostgreSQL<br/>cost_snapshots)]
     GO -->|"data_source: snapshots_approximation / heuristic_rules"| T
+    LLM -->|"knowledge tool call"| R[finops_knowledge_search<br/>RAG]
+    R -->|"similarity search"| VDB[(pgvector<br/>finops_knowledge)]
     T --> LLM
+    R --> LLM
     LLM -->|"natural-language answer"| CLI
     CLI --> U
 ```
 
-The agent ships five tools: two cost endpoints (totals per provider, per-service
-breakdown), a savings-recommendations endpoint ("where can I save money?") from
-the rule-based analyzer, a cost-trends endpoint ("is my spend growing?") with a
-per-day series and precomputed change summary, and a resource-inventory endpoint
-("what do I have?") with counts and cost by provider/service. Setup, env vars,
-CLI usage, and the smoke test are documented in
-**[insights-agent/README.md](insights-agent/README.md)**.
+The agent ships five HTTP tools — two cost endpoints (totals per provider,
+per-service breakdown), a savings-recommendations endpoint ("where can I save
+money?") from the rule-based analyzer, a cost-trends endpoint ("is my spend
+growing?") with a per-day series and precomputed change summary, and a
+resource-inventory endpoint ("what do I have?") — plus a sixth RAG tool,
+`finops_knowledge_search`, that answers conceptual / policy questions from a
+curated FinOps corpus embedded in pgvector. RAG is optional (enabled by
+`DATABASE_URL`). Setup, env vars, the RAG ingestion step, and the smoke test are
+documented in **[insights-agent/README.md](insights-agent/README.md)**.
 
 ## v2 — Quick start (current focus)
 
@@ -134,7 +139,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 - [X]  **Milestone 8.0** — Authenticated `/api/v1/cost-summary` and `/api/v1/cost-by-service` Go endpoints (X-API-Key, snapshot-derived totals with explicit `data_source` disclaimer, machine-readable error codes)
 - [X]  **Milestone 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
 - [X]  **Milestone 8.2** — Additional agent tools, each a new authenticated v1 endpoint: `GET /api/v1/recommendations` (rule-based savings, `data_source: heuristic_rules`), `GET /api/v1/cost-trends` (per-day series with precomputed change/direction), and `GET /api/v1/inventory` (resource counts + cost by provider/service, `data_source: live_inventory`) — wired as `cloudoracle_recommendations` / `cloudoracle_cost_trends` / `cloudoracle_inventory` tools. Agent now ships 5 tools
-- [ ]  **Milestone 8.3** — pgvector + RAG over FinOps documentation
+- [X]  **Milestone 8.3** — pgvector + RAG over a curated FinOps corpus: packaged markdown knowledge base, Gemini embeddings (mirroring the LLM-provider ABC), `langchain-postgres` PGVector store (compose image → `pgvector/pgvector:pg16`), `insights-agent-ingest` CLI, and a `finops_knowledge_search` tool the agent uses for conceptual/policy questions with source citations. Optional via `DATABASE_URL`; retrieval path unit-tested offline with an in-memory store
 - [ ]  **Milestone 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
 - [ ]  **Milestone 8.5** — Production guardrails: cost caps, deterministic fallback, semantic answer validation, HTTP API surface
 - [ ]  **Milestone 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation

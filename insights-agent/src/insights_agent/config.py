@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     log_format: str = "text"
     http_timeout_seconds: float = Field(default=10.0, gt=0)
 
+    # RAG / knowledge base (milestone 8.3). Optional: when database_url is
+    # unset the agent runs without the finops_knowledge_search tool, so the
+    # cost/inventory/recommendation tools work with no Postgres dependency.
+    # database_url is a SQLAlchemy/psycopg URL, e.g.
+    # postgresql+psycopg://oracle:oracle_dev@localhost:5432/cloudoracle
+    database_url: str | None = None
+    embeddings_model: str = "models/text-embedding-004"
+    knowledge_collection: str = "finops_knowledge"
+    rag_top_k: int = Field(default=4, ge=1, le=20)
+
     @field_validator("log_level")
     @classmethod
     def _normalize_log_level(cls, v: str) -> str:

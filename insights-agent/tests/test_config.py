@@ -65,3 +65,34 @@ def test_timeout_must_be_positive(
     monkeypatch.setenv("HTTP_TIMEOUT_SECONDS", "0")
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_rag_settings_default_to_disabled(valid_env: None) -> None:
+    s = Settings()
+    # No DATABASE_URL → RAG is off; the rest carry sensible defaults.
+    assert s.database_url is None
+    assert s.embeddings_model == "models/text-embedding-004"
+    assert s.knowledge_collection == "finops_knowledge"
+    assert s.rag_top_k == 4
+
+
+def test_rag_settings_from_env(
+    valid_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(
+        "DATABASE_URL", "postgresql+psycopg://oracle:oracle_dev@localhost:5432/cloudoracle"
+    )
+    monkeypatch.setenv("KNOWLEDGE_COLLECTION", "kb")
+    monkeypatch.setenv("RAG_TOP_K", "8")
+    s = Settings()
+    assert s.database_url is not None
+    assert s.knowledge_collection == "kb"
+    assert s.rag_top_k == 8
+
+
+def test_rag_top_k_out_of_range_rejected(
+    valid_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("RAG_TOP_K", "0")
+    with pytest.raises(ValidationError):
+        Settings()

@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from insights_agent.config import Settings
 from insights_agent.graph.basic import AgentResult
 from insights_agent.main import (
     EXIT_CONFIG,
@@ -18,6 +19,7 @@ from insights_agent.main import (
     EXIT_OK,
     EXIT_RUNTIME,
     _build_arg_parser,
+    _maybe_build_knowledge_tool,
     cli_entrypoint,
 )
 
@@ -102,6 +104,24 @@ def test_cli_runtime_error_returns_1(
     rc = cli_entrypoint(["q"])
     assert rc == EXIT_RUNTIME
     assert "kaboom" in capsys.readouterr().err
+
+
+class _SpyLog:
+    def __init__(self) -> None:
+        self.events: list[str] = []
+
+    def info(self, event: str, **_: Any) -> None:
+        self.events.append(event)
+
+
+def test_knowledge_tool_disabled_without_database_url(valid_env: None) -> None:
+    # No DATABASE_URL → the RAG tool is skipped and the reason is logged, so
+    # the agent runs with just the cost/inventory/recommendation tools.
+    settings = Settings()
+    log = _SpyLog()
+    tool = _maybe_build_knowledge_tool(settings, log)
+    assert tool is None
+    assert "rag.disabled" in log.events
 
 
 def test_cli_interrupt_returns_130(
