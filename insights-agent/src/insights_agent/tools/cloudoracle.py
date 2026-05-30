@@ -206,6 +206,19 @@ class CloudOracleClient:
             params["provider"] = _validate_provider(provider)
         return await self._get("/api/v1/cost-trends", params)
 
+    async def inventory(
+        self,
+        provider: str | None = None,
+        top: int = 50,
+    ) -> dict[str, Any]:
+        if not 1 <= top <= 200:
+            raise ValueError(f"top={top} must be in [1, 200]")
+
+        params: dict[str, str] = {"top": str(top)}
+        if provider is not None:
+            params["provider"] = _validate_provider(provider)
+        return await self._get("/api/v1/inventory", params)
+
 
 def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
     """Wrap the client methods as LangChain `StructuredTool`s.
@@ -260,6 +273,15 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
             raise ToolException(str(e)) from e
 
+    async def _inventory(
+        provider: str | None = None,
+        top: int = 50,
+    ) -> dict[str, Any]:
+        try:
+            return await client.inventory(provider, top)
+        except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
+            raise ToolException(str(e)) from e
+
     summary_tool = StructuredTool.from_function(
         coroutine=_summary,
         name="cloudoracle_cost_summary",
@@ -284,7 +306,19 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         description=_COST_TRENDS_DESC,
         handle_tool_error=True,
     )
-    return [summary_tool, by_service_tool, recommendations_tool, cost_trends_tool]
+    inventory_tool = StructuredTool.from_function(
+        coroutine=_inventory,
+        name="cloudoracle_inventory",
+        description=_INVENTORY_DESC,
+        handle_tool_error=True,
+    )
+    return [
+        summary_tool,
+        by_service_tool,
+        recommendations_tool,
+        cost_trends_tool,
+        inventory_tool,
+    ]
 
 
 _COST_SUMMARY_DESC = """Return aggregated cloud cost totals per provider for a date range.
@@ -425,6 +459,47 @@ up 50% over the period") rather than re-deriving it from `points`. `first`,
 IMPORTANT: Same snapshot-approximation caveat as the cost endpoints —
 `data_source == "snapshots_approximation"` means per-day totals are projected
 monthly rates from snapshots, not billed spend. Surface it when accuracy matters."""
+
+
+_INVENTORY_DESC = """Return a resource-inventory summary: what you have and how much it costs.
+
+Use this for "what do I have?" questions — counts of resources, which services
+or providers dominate, where cost concentrates by inventory ("how many EC2
+instances?", "what's my biggest service?", "break down my footprint by cloud").
+This counts CURRENT scanned resources; for spend over a date range use
+cloudoracle_cost_summary, and for savings use cloudoracle_recommendations.
+
+Args:
+    provider: Optional filter, one of "aws", "gcp", "azure". Omit for all clouds.
+    top: Max entries in the by_service list, sorted by cost descending.
+         Default 50, range 1..200. by_service is the only capped field.
+
+Returns:
+    A dict with this shape:
+      {
+        "provider": "aws",            # present only when filtered
+        "total_resources": 7,
+        "total_monthly_cost_usd": 500.0,
+        "total_services": 6,          # distinct (provider, service) pairs
+        "by_provider": {
+          "aws": {"count": 3, "monthly_cost_usd": 350.0},
+          "gcp": {"count": 2, "monthly_cost_usd": 90.0}
+        },
+        "by_service": [
+          {"service": "ec2", "provider": "aws", "count": 2,
+           "monthly_cost_usd": 300.0}
+        ],
+        "generated_at": "...",
+        "data_source": "live_inventory",
+        "note": "<inventory reflects the latest scan; cost is projected rate>"
+      }
+
+total_resources / total_monthly_cost_usd / total_services / by_provider cover the
+full filtered set; only by_service is capped by `top`. If `len(by_service) <
+total_services`, the list was truncated — say so.
+
+IMPORTANT: `data_source == "live_inventory"` — `monthly_cost_usd` sums per-resource
+projected monthly cost rates from the latest scan, NOT billed spend."""
 
 
 def _validate_date(value: str, field: str) -> date:

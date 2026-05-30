@@ -88,6 +88,23 @@ TRENDS_OK: dict[str, Any] = {
     "note": "approximation note",
 }
 
+INVENTORY_OK: dict[str, Any] = {
+    "total_resources": 7,
+    "total_monthly_cost_usd": 500.0,
+    "total_services": 6,
+    "by_provider": {
+        "aws": {"count": 3, "monthly_cost_usd": 350.0},
+        "gcp": {"count": 2, "monthly_cost_usd": 90.0},
+        "azure": {"count": 2, "monthly_cost_usd": 60.0},
+    },
+    "by_service": [
+        {"service": "ec2", "provider": "aws", "count": 2, "monthly_cost_usd": 300.0},
+    ],
+    "generated_at": "2026-05-18T12:00:00Z",
+    "data_source": "live_inventory",
+    "note": "inventory note",
+}
+
 
 class TestClientConstruction:
     def test_rejects_empty_base_url(self) -> None:
@@ -210,6 +227,32 @@ class TestCostTrendsHappyPath:
         assert req is not None
         assert b"days=30" in req.url.query
         assert b"provider=aws" in req.url.query
+        await client.aclose()
+
+
+class TestInventoryHappyPath:
+    async def test_success_defaults(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=INVENTORY_OK)
+        out = await client.inventory()
+        assert out == INVENTORY_OK
+        req = httpx_mock.get_request()
+        assert req is not None
+        assert req.url.path == "/api/v1/inventory"
+        assert b"top=50" in req.url.query
+        assert b"provider=" not in req.url.query
+        await client.aclose()
+
+    async def test_params_include_provider_and_top(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=INVENTORY_OK)
+        await client.inventory(provider="AWS", top=10)
+        req = httpx_mock.get_request()
+        assert req is not None
+        assert b"provider=aws" in req.url.query
+        assert b"top=10" in req.url.query
         await client.aclose()
 
 
@@ -379,9 +422,25 @@ class TestLocalValidation:
             await client.cost_trends(provider="oracle-cloud")
         await client.aclose()
 
+    async def test_inventory_top_out_of_range(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match=r"top=\d+ must be in"):
+            await client.inventory(top=0)
+        with pytest.raises(ValueError, match=r"top=\d+ must be in"):
+            await client.inventory(top=201)
+        await client.aclose()
+
+    async def test_inventory_invalid_provider(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match="must be one of"):
+            await client.inventory(provider="oracle-cloud")
+        await client.aclose()
+
 
 class TestBuildTools:
-    async def test_builds_four_tools_with_expected_names(
+    async def test_builds_five_tools_with_expected_names(
         self, client: CloudOracleClient
     ) -> None:
         tools = build_tools(client)
@@ -391,6 +450,7 @@ class TestBuildTools:
             "cloudoracle_cost_by_service",
             "cloudoracle_recommendations",
             "cloudoracle_cost_trends",
+            "cloudoracle_inventory",
         }
         await client.aclose()
 
@@ -398,8 +458,8 @@ class TestBuildTools:
         self, client: CloudOracleClient
     ) -> None:
         # Every tool documents its data_source so the model knows which caveat
-        # to surface: the cost tools use snapshots_approximation, the
-        # recommendations tool uses heuristic_rules.
+        # to surface: the cost/trends tools use snapshots_approximation, the
+        # recommendations tool uses heuristic_rules, inventory uses live_inventory.
         for t in build_tools(client):
             assert "data_source" in t.description
         tools_by_name = {t.name: t for t in build_tools(client)}
@@ -407,6 +467,7 @@ class TestBuildTools:
         assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_by_service"].description
         assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_trends"].description
         assert "heuristic_rules" in tools_by_name["cloudoracle_recommendations"].description
+        assert "live_inventory" in tools_by_name["cloudoracle_inventory"].description
         await client.aclose()
 
     async def test_summary_tool_invokes_client(
@@ -484,4 +545,25 @@ class TestBuildTools:
         )
         out = await trends_tool.ainvoke({"days": 9999})
         assert "must be in" in str(out)
+        await client.aclose()
+
+    async def test_inventory_tool_invokes_client(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=INVENTORY_OK)
+        inventory_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_inventory"
+        )
+        out = await inventory_tool.ainvoke({"provider": "aws", "top": 10})
+        assert out == INVENTORY_OK
+        await client.aclose()
+
+    async def test_inventory_tool_wraps_validation_error(
+        self, client: CloudOracleClient
+    ) -> None:
+        inventory_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_inventory"
+        )
+        out = await inventory_tool.ainvoke({"provider": "oracle-cloud"})
+        assert "must be one of" in str(out)
         await client.aclose()
