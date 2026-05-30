@@ -5,13 +5,17 @@ LangGraph-based FinOps insights agent for CloudOracle. Ask in natural language
 `/api/v1` calls against the CloudOracle Go server, then answers in the same
 language with the relevant caveats.
 
-Built on `create_react_agent` from `langgraph.prebuilt`: single-turn agent (no
-conversational memory), Gemini as the model. Five tools call the Go `/api/v1`
-endpoints — two cost endpoints (milestone 8.1) plus savings recommendations,
-cost trends, and a resource-inventory endpoint (milestone 8.2). A sixth tool,
-`finops_knowledge_search`, does RAG over a curated FinOps corpus stored in
-pgvector (milestone 8.3) for conceptual / policy / how-to questions. The next
-milestone replaces the ReAct loop with a custom supervisor (8.4).
+Single-turn agent (no conversational memory), Gemini as the model. Five tools
+call the Go `/api/v1` endpoints — two cost endpoints (milestone 8.1) plus
+savings recommendations, cost trends, and a resource-inventory endpoint
+(milestone 8.2). A sixth tool, `finops_knowledge_search`, does RAG over a
+curated FinOps corpus stored in pgvector (milestone 8.3) for conceptual /
+policy / how-to questions.
+
+The default orchestration is a **hand-rolled supervisor** (milestone 8.4): a
+`StateGraph` where a supervisor routes between three specialist workers and a
+synthesizer composes the final answer — replacing `create_react_agent`. See
+[Multi-agent supervisor](#multi-agent-supervisor).
 
 ## What it talks to
 
@@ -59,6 +63,34 @@ The agent surfaces these caveats when accuracy materially affects the answer.
 pgvector-enabled Postgres (see [Knowledge base (RAG)](#knowledge-base-rag)).
 Without it the five HTTP tools still work — the agent just can't answer
 conceptual questions from the corpus.
+
+## Multi-agent supervisor
+
+`graph/supervisor.py` is the default orchestration — a hand-rolled
+`StateGraph`, not `create_react_agent`:
+
+```
+START → supervisor → {worker} → supervisor → … → synthesize → END
+```
+
+- **supervisor** routes by *tool call*: it's bound with one routing tool per
+  specialist plus `finish`, and the tool it calls names the next hop. (Routing
+  via tool calls — rather than `with_structured_output` — keeps the node
+  driveable by the scripted fake model the tests use.)
+- **workers** are three specialists, each a hand-rolled ReAct loop
+  (`_run_react`, the actual `create_react_agent` replacement) over a tool
+  subset:
+  - `cost_analyst` → cost-summary / cost-by-service / cost-trends / inventory
+  - `savings_advisor` → recommendations + knowledge search
+  - `concept_expert` → knowledge search
+  A worker contributes one summarizing message back; its own tool churn stays
+  local so the supervisor and synthesizer see a clean transcript.
+- **synthesize** composes the final answer from the specialists' findings,
+  in the user's language, with the data-source caveats and source citations.
+
+A hop cap (`MAX_HOPS`) bounds the supervisor loop so a model that never emits
+`finish` still terminates. The simpler single-agent graph (`graph/basic.py`,
+`create_react_agent`) is retained for tests and comparison.
 
 ## Setup in under 10 minutes
 
@@ -234,14 +266,16 @@ uv run mypy src/               # strict type-check
 uv run insights-agent-ingest   # (needs DATABASE_URL) embed the FinOps corpus
 ```
 
-The tests never contact Gemini, a live Go server, or Postgres.
-`tests/test_graph.py` ships a `ScriptedChatModel` (a `BaseChatModel` subclass)
-that replays hand-written `AIMessage` sequences, and `pytest-httpx` mocks the
-Go endpoints — together they let `create_react_agent` run its full ReAct loop
-deterministically. The RAG layer is tested offline too: `tests/test_corpus.py`
-checks chunking, and `tests/test_knowledge_tool.py` drives the real retrieval +
-citation path through an `InMemoryVectorStore` + `DeterministicFakeEmbedding`,
-so no pgvector or embeddings API is needed.
+The tests never contact Gemini, a live Go server, or Postgres. A
+`ScriptedChatModel` (a `BaseChatModel` subclass) replays hand-written
+`AIMessage` sequences and `pytest-httpx` mocks the Go endpoints, so both graphs
+run deterministically: `tests/test_graph.py` drives the simple
+`create_react_agent` graph, and `tests/test_supervisor.py` drives the supervisor
+end-to-end (route → worker tool call → finish → synthesize, plus the hop cap).
+The RAG layer is tested offline too: `tests/test_corpus.py` checks chunking, and
+`tests/test_knowledge_tool.py` drives the real retrieval + citation path through
+an `InMemoryVectorStore` + `DeterministicFakeEmbedding`, so no pgvector or
+embeddings API is needed.
 
 ### Architecture pointers
 
@@ -250,14 +284,14 @@ so no pgvector or embeddings API is needed.
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
 | Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the five methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
 | RAG                 | `src/insights_agent/rag/` + `tools/knowledge.py` | `corpus.py` loads + chunks the packaged markdown (offline-testable); `embeddings.py` mirrors the LLM-provider ABC for Gemini embeddings; `store.py` wraps pgvector; `ingest.py` is the `insights-agent-ingest` CLI; `knowledge.py` exposes `finops_knowledge_search`. Only wired in when `DATABASE_URL` is set. |
-| Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Milestone 8.4 replaces this with a hand-rolled supervisor. |
+| Graph (default)     | `src/insights_agent/graph/supervisor.py` | Hand-rolled `StateGraph`: tool-call-routing supervisor + three specialist workers (each a `_run_react` loop) + synthesizer, with a hop cap. The production path `main.py` wires. |
+| Graph (simple)      | `src/insights_agent/graph/basic.py` | `create_react_agent` single-agent graph. Retained for tests/comparison; `AgentResult` + `_stringify_content` live here and the supervisor reuses them. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |
 | Logging             | `src/insights_agent/logging.py` | `structlog` matching the Go side's `slog` output (text or JSON to stderr) so a tail of both streams reads coherently. |
 
 ### What is **not** here yet
 
-- Custom supervisor / multi-agent (8.4)
 - Cost caps, semantic answer validation, deterministic fallback (8.5)
 - HTTP API surface for the agent — CLI only until 8.5
 - Other LLM providers (Anthropic, OpenAI)
