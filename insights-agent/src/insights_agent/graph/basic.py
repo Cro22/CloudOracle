@@ -1,8 +1,10 @@
 """Basic ReAct graph: question → tool call(s) → natural-language answer.
 
-Uses `langgraph.prebuilt.create_react_agent` for the first end-to-end
-round-trip. Milestone 8.4 will replace this with a hand-rolled supervisor
-pattern; until then, `create_react_agent` gives us:
+The simple single-agent graph, built on `langgraph.prebuilt.create_react_agent`.
+As of milestone 8.4 the production path uses the hand-rolled supervisor
+(`graph/supervisor.py`) instead; this graph is retained for tests and
+comparison, and it owns the shared `AgentResult` / `_stringify_content` helpers
+the supervisor reuses. `create_react_agent` gives us:
 
   - A tool-aware LLM call (bind_tools is invoked under the hood).
   - A loop that runs tool calls until the LLM emits a final answer or hits

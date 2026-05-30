@@ -28,7 +28,8 @@ from langchain_core.tools import BaseTool
 from pydantic import ValidationError
 
 from insights_agent.config import Settings
-from insights_agent.graph.basic import AgentResult, ask, build_graph
+from insights_agent.graph.basic import AgentResult
+from insights_agent.graph.supervisor import ask_supervisor, build_supervisor_graph
 from insights_agent.llm import GeminiProvider
 from insights_agent.logging import get_logger, setup
 from insights_agent.tools.cloudoracle import CloudOracleClient, build_tools
@@ -124,8 +125,8 @@ async def _run(query: str, *, as_json: bool, verbose: bool) -> AgentResult:
         knowledge_tool = _maybe_build_knowledge_tool(settings, log)
         if knowledge_tool is not None:
             tools.append(knowledge_tool)
-        graph = build_graph(provider.get_chat_model(), tools)
-        result = await ask(graph, query)
+        graph = build_supervisor_graph(provider.get_chat_model(), tools)
+        result = await ask_supervisor(graph, query)
 
     if verbose and result.tool_calls:
         print("Tool calls made:", file=sys.stderr)

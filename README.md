@@ -18,7 +18,7 @@ the data over HTTP, and answers in the user's language — surfacing the
 ```mermaid
 flowchart LR
     U([User]) -->|"How much did I spend on AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
-    CLI --> G[LangGraph<br/>create_react_agent]
+    CLI --> G[LangGraph supervisor<br/>3 specialists + synthesize]
     G -->|"bind_tools"| LLM[Gemini 2.5 Flash]
     LLM -->|"HTTP tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations / cost-trends / inventory]
     T -->|"GET /api/v1/* + X-API-Key"| GO[CloudOracle Go<br/>oracle serve]
@@ -140,7 +140,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 - [X]  **Milestone 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
 - [X]  **Milestone 8.2** — Additional agent tools, each a new authenticated v1 endpoint: `GET /api/v1/recommendations` (rule-based savings, `data_source: heuristic_rules`), `GET /api/v1/cost-trends` (per-day series with precomputed change/direction), and `GET /api/v1/inventory` (resource counts + cost by provider/service, `data_source: live_inventory`) — wired as `cloudoracle_recommendations` / `cloudoracle_cost_trends` / `cloudoracle_inventory` tools. Agent now ships 5 tools
 - [X]  **Milestone 8.3** — pgvector + RAG over a curated FinOps corpus: packaged markdown knowledge base, Gemini embeddings (mirroring the LLM-provider ABC), `langchain-postgres` PGVector store (compose image → `pgvector/pgvector:pg16`), `insights-agent-ingest` CLI, and a `finops_knowledge_search` tool the agent uses for conceptual/policy questions with source citations. Optional via `DATABASE_URL`; retrieval path unit-tested offline with an in-memory store
-- [ ]  **Milestone 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
+- [X]  **Milestone 8.4** — Hand-rolled supervisor multi-agent graph replacing `create_react_agent`: a `StateGraph` where a tool-call-routing supervisor delegates to three specialist workers (cost analyst, savings advisor, concept expert — each its own hand-rolled ReAct loop) and a synthesizer composes the answer, with a hop cap. Driveable end-to-end by the scripted fake model; `create_react_agent` kept as the simple graph
 - [ ]  **Milestone 8.5** — Production guardrails: cost caps, deterministic fallback, semantic answer validation, HTTP API surface
 - [ ]  **Milestone 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation
 
