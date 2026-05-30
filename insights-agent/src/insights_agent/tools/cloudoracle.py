@@ -30,6 +30,7 @@ from langchain_core.tools import StructuredTool, ToolException
 logger = structlog.get_logger(__name__)
 
 VALID_PROVIDERS: frozenset[str] = frozenset({"aws", "gcp", "azure"})
+VALID_SEVERITIES: frozenset[str] = frozenset({"high", "medium", "low"})
 _DATE_FMT = "%Y-%m-%d"
 
 
@@ -176,6 +177,22 @@ class CloudOracleClient:
         }
         return await self._get("/api/v1/cost-by-service", params)
 
+    async def recommendations(
+        self,
+        provider: str | None = None,
+        severity: str | None = None,
+        top: int = 20,
+    ) -> dict[str, Any]:
+        if not 1 <= top <= 200:
+            raise ValueError(f"top={top} must be in [1, 200]")
+
+        params: dict[str, str] = {"top": str(top)}
+        if provider is not None:
+            params["provider"] = _validate_provider(provider)
+        if severity is not None:
+            params["severity"] = _validate_severity(severity)
+        return await self._get("/api/v1/recommendations", params)
+
 
 def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
     """Wrap the client methods as LangChain `StructuredTool`s.
@@ -211,6 +228,16 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
             raise ToolException(str(e)) from e
 
+    async def _recommendations(
+        provider: str | None = None,
+        severity: str | None = None,
+        top: int = 20,
+    ) -> dict[str, Any]:
+        try:
+            return await client.recommendations(provider, severity, top)
+        except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
+            raise ToolException(str(e)) from e
+
     summary_tool = StructuredTool.from_function(
         coroutine=_summary,
         name="cloudoracle_cost_summary",
@@ -223,7 +250,13 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         description=_COST_BY_SERVICE_DESC,
         handle_tool_error=True,
     )
-    return [summary_tool, by_service_tool]
+    recommendations_tool = StructuredTool.from_function(
+        coroutine=_recommendations,
+        name="cloudoracle_recommendations",
+        description=_RECOMMENDATIONS_DESC,
+        handle_tool_error=True,
+    )
+    return [summary_tool, by_service_tool, recommendations_tool]
 
 
 _COST_SUMMARY_DESC = """Return aggregated cloud cost totals per provider for a date range.
@@ -280,6 +313,50 @@ IMPORTANT: Same snapshot-approximation caveat as cloudoracle_cost_summary —
 surface it to the user when accuracy matters for the answer."""
 
 
+_RECOMMENDATIONS_DESC = """Return cost-optimization recommendations (where to save money).
+
+Use this for "where can I save money?", "what's wasteful?", "show me my top
+optimizations", or any savings / right-sizing / idle-resource question. This is
+NOT a spend query — for "how much did I spend", use cloudoracle_cost_summary.
+
+Args:
+    provider: Optional filter, one of "aws", "gcp", "azure". Omit for all clouds.
+    severity: Optional filter, one of "high", "medium", "low". Omit for all.
+              "high" = biggest / most certain waste; start here for quick wins.
+    top: Max recommendations to return, sorted by monthly savings descending.
+         Default 20, range 1..200. Use 5-10 for an executive shortlist.
+
+Returns:
+    A dict with this shape:
+      {
+        "recommendations": [
+          {
+            "resource_id": "i-aaa", "provider": "aws", "service": "ec2",
+            "resource_type": "t3.large", "region": "us-east-1",
+            "rule": "ec2-idle", "severity": "High",
+            "monthly_cost_usd": 300.0, "monthly_savings_usd": 300.0,
+            "description": "EC2 i-aaa ... CPU usage 1.0% ...",
+            "recommendation": "Consider shutting down or terminating ..."
+          }
+        ],
+        "total_count": 12,            # full filtered set, before the top cap
+        "returned_count": 10,         # after the top cap
+        "total_monthly_savings_usd": 1450.0,   # sum over the full filtered set
+        "by_severity": {"High": 3, "Medium": 5, "Low": 4},
+        "filters": {"provider": "aws", "severity": "", "top": 10},
+        "generated_at": "...",
+        "data_source": "heuristic_rules",
+        "note": "<caveat: heuristic upper-bound savings, validate before acting>"
+      }
+
+IMPORTANT: `data_source == "heuristic_rules"` means these come from a rule-based
+analyzer over the current inventory, NOT real billing. `monthly_savings_usd` is
+an estimated upper bound. When recommending action, tell the user to validate
+against real usage first, and quote `total_monthly_savings_usd` for the headline
+opportunity. If `returned_count < total_count`, mention the list was truncated to
+the top N by savings."""
+
+
 def _validate_date(value: str, field: str) -> date:
     try:
         return datetime.strptime(value, _DATE_FMT).date()
@@ -299,6 +376,15 @@ def _validate_provider(value: str) -> str:
     if norm not in VALID_PROVIDERS:
         raise ValueError(
             f"provider={value!r} must be one of {sorted(VALID_PROVIDERS)}"
+        )
+    return norm
+
+
+def _validate_severity(value: str) -> str:
+    norm = value.strip().lower() if isinstance(value, str) else ""
+    if norm not in VALID_SEVERITIES:
+        raise ValueError(
+            f"severity={value!r} must be one of {sorted(VALID_SEVERITIES)}"
         )
     return norm
 

@@ -5,11 +5,11 @@ LangGraph-based FinOps insights agent for CloudOracle. Ask in natural language
 `/api/v1` calls against the CloudOracle Go server, then answers in the same
 language with the relevant caveats.
 
-This is the first round-trip of milestone 8.1: single-turn agent (no
-conversational memory), `create_react_agent` from `langgraph.prebuilt`, two
-tools wired against the Go cost endpoints, Gemini as the model. Future
-milestones replace the ReAct loop with a custom supervisor (8.4) and add
-RAG over FinOps docs (8.3).
+Built on `create_react_agent` from `langgraph.prebuilt`: single-turn agent (no
+conversational memory), Gemini as the model, three tools wired against the Go
+`/api/v1` endpoints — two cost endpoints (milestone 8.1) plus a savings
+recommendations endpoint (milestone 8.2). Future milestones replace the ReAct
+loop with a custom supervisor (8.4) and add RAG over FinOps docs (8.3).
 
 ## What it talks to
 
@@ -27,11 +27,25 @@ RAG over FinOps docs (8.3).
                                             └─────────────┘
 ```
 
-The two tools both return a `data_source` field. While it equals
-`"snapshots_approximation"`, the figures come from periodic CloudOracle
-snapshots — **not** a real billing API. The agent surfaces that caveat
-to the user when accuracy materially affects the answer. The real billing
-integration lands in milestone 8.7.
+Every tool returns a `data_source` field so the agent surfaces the right
+caveat:
+
+- The two **cost** tools return `"snapshots_approximation"` — figures come
+  from periodic CloudOracle snapshots, **not** a real billing API (the real
+  billing integration lands in milestone 8.7).
+- The **recommendations** tool returns `"heuristic_rules"` — savings are
+  estimated upper bounds from a rule-based analyzer over the current resource
+  inventory, to be validated against real usage before acting.
+
+The agent surfaces these caveats when accuracy materially affects the answer.
+
+### Tools
+
+| Tool | Answers | Backing endpoint |
+| ---- | ------- | ---------------- |
+| `cloudoracle_cost_summary`    | "how much did I spend?" (totals per provider) | `GET /api/v1/cost-summary` |
+| `cloudoracle_cost_by_service` | "what drove AWS spend?" (per-service breakdown) | `GET /api/v1/cost-by-service` |
+| `cloudoracle_recommendations` | "where can I save money?" (savings opportunities) | `GET /api/v1/recommendations` |
 
 ## Setup in under 10 minutes
 
@@ -169,15 +183,14 @@ ReAct loop deterministically — including the tool-error branch.
 | Concern             | Where to look | Why |
 | ------------------- | ------------- | --- |
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
-| Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the two methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
+| Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the three methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
 | Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Milestone 8.4 replaces this with a hand-rolled supervisor. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |
 | Logging             | `src/insights_agent/logging.py` | `structlog` matching the Go side's `slog` output (text or JSON to stderr) so a tail of both streams reads coherently. |
 
-### What is **not** in this milestone
+### What is **not** here yet
 
-- More tools (milestone 8.2)
 - pgvector / RAG over FinOps docs (8.3)
 - Custom supervisor / multi-agent (8.4)
 - Cost caps, semantic answer validation, deterministic fallback (8.5)
