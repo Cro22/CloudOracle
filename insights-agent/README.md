@@ -6,10 +6,11 @@ LangGraph-based FinOps insights agent for CloudOracle. Ask in natural language
 language with the relevant caveats.
 
 Built on `create_react_agent` from `langgraph.prebuilt`: single-turn agent (no
-conversational memory), Gemini as the model, three tools wired against the Go
-`/api/v1` endpoints — two cost endpoints (milestone 8.1) plus a savings
-recommendations endpoint (milestone 8.2). Future milestones replace the ReAct
-loop with a custom supervisor (8.4) and add RAG over FinOps docs (8.3).
+conversational memory), Gemini as the model, four tools wired against the Go
+`/api/v1` endpoints — two cost endpoints (milestone 8.1) plus savings
+recommendations and a cost-trends endpoint (milestone 8.2). Future milestones
+replace the ReAct loop with a custom supervisor (8.4) and add RAG over FinOps
+docs (8.3).
 
 ## What it talks to
 
@@ -30,9 +31,9 @@ loop with a custom supervisor (8.4) and add RAG over FinOps docs (8.3).
 Every tool returns a `data_source` field so the agent surfaces the right
 caveat:
 
-- The two **cost** tools return `"snapshots_approximation"` — figures come
-  from periodic CloudOracle snapshots, **not** a real billing API (the real
-  billing integration lands in milestone 8.7).
+- The **cost** and **trends** tools return `"snapshots_approximation"` —
+  figures come from periodic CloudOracle snapshots, **not** a real billing API
+  (the real billing integration lands in milestone 8.7).
 - The **recommendations** tool returns `"heuristic_rules"` — savings are
   estimated upper bounds from a rule-based analyzer over the current resource
   inventory, to be validated against real usage before acting.
@@ -46,6 +47,7 @@ The agent surfaces these caveats when accuracy materially affects the answer.
 | `cloudoracle_cost_summary`    | "how much did I spend?" (totals per provider) | `GET /api/v1/cost-summary` |
 | `cloudoracle_cost_by_service` | "what drove AWS spend?" (per-service breakdown) | `GET /api/v1/cost-by-service` |
 | `cloudoracle_recommendations` | "where can I save money?" (savings opportunities) | `GET /api/v1/recommendations` |
+| `cloudoracle_cost_trends`     | "is my spend growing?" (per-day series + change) | `GET /api/v1/cost-trends` |
 
 ## Setup in under 10 minutes
 
@@ -183,7 +185,7 @@ ReAct loop deterministically — including the tool-error branch.
 | Concern             | Where to look | Why |
 | ------------------- | ------------- | --- |
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
-| Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the three methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
+| Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the four methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
 | Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Milestone 8.4 replaces this with a hand-rolled supervisor. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |

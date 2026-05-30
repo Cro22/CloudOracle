@@ -193,6 +193,19 @@ class CloudOracleClient:
             params["severity"] = _validate_severity(severity)
         return await self._get("/api/v1/recommendations", params)
 
+    async def cost_trends(
+        self,
+        days: int = 90,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        if not 1 <= days <= 365:
+            raise ValueError(f"days={days} must be in [1, 365]")
+
+        params: dict[str, str] = {"days": str(days)}
+        if provider is not None:
+            params["provider"] = _validate_provider(provider)
+        return await self._get("/api/v1/cost-trends", params)
+
 
 def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
     """Wrap the client methods as LangChain `StructuredTool`s.
@@ -238,6 +251,15 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
             raise ToolException(str(e)) from e
 
+    async def _cost_trends(
+        days: int = 90,
+        provider: str | None = None,
+    ) -> dict[str, Any]:
+        try:
+            return await client.cost_trends(days, provider)
+        except (CloudOracleAPIError, CloudOracleTransportError, ValueError) as e:
+            raise ToolException(str(e)) from e
+
     summary_tool = StructuredTool.from_function(
         coroutine=_summary,
         name="cloudoracle_cost_summary",
@@ -256,7 +278,13 @@ def build_tools(client: CloudOracleClient) -> list[StructuredTool]:
         description=_RECOMMENDATIONS_DESC,
         handle_tool_error=True,
     )
-    return [summary_tool, by_service_tool, recommendations_tool]
+    cost_trends_tool = StructuredTool.from_function(
+        coroutine=_cost_trends,
+        name="cloudoracle_cost_trends",
+        description=_COST_TRENDS_DESC,
+        handle_tool_error=True,
+    )
+    return [summary_tool, by_service_tool, recommendations_tool, cost_trends_tool]
 
 
 _COST_SUMMARY_DESC = """Return aggregated cloud cost totals per provider for a date range.
@@ -355,6 +383,48 @@ an estimated upper bound. When recommending action, tell the user to validate
 against real usage first, and quote `total_monthly_savings_usd` for the headline
 opportunity. If `returned_count < total_count`, mention the list was truncated to
 the top N by savings."""
+
+
+_COST_TRENDS_DESC = """Return a per-day cost time series to answer "is my spend growing?".
+
+Use this for trend / over-time / trajectory questions ("is my AWS bill going up?",
+"how has spend changed over the last quarter?", "show the cost trend"). For a
+single-period total use cloudoracle_cost_summary instead; this tool is about the
+*direction* of change.
+
+Args:
+    days: Trailing window length in days. Default 90, range 1..365.
+    provider: Optional filter, one of "aws", "gcp", "azure". When set, each
+              day's total is recomputed for that cloud only. Omit for all clouds.
+
+Returns:
+    A dict with this shape:
+      {
+        "days": 90,
+        "provider": "aws",            # present only when filtered
+        "points": [
+          {"date": "2026-03-01", "total_cost_usd": 200.0},
+          {"date": "2026-03-30", "total_cost_usd": 300.0}
+        ],
+        "first":  {"date": "2026-03-01", "total_cost_usd": 200.0},
+        "latest": {"date": "2026-03-30", "total_cost_usd": 300.0},
+        "change": {
+          "absolute_usd": 100.0,
+          "percent_from_first": 50.0,  # null when the first day was 0
+          "direction": "up"            # "up" | "down" | "flat"
+        },
+        "generated_at": "...",
+        "data_source": "snapshots_approximation",
+        "note": "<same snapshot caveat as the cost endpoints>"
+      }
+
+Prefer the precomputed `change` / `first` / `latest` for the headline ("spend is
+up 50% over the period") rather than re-deriving it from `points`. `first`,
+`latest`, and `change` are null when there's no data in the window.
+
+IMPORTANT: Same snapshot-approximation caveat as the cost endpoints —
+`data_source == "snapshots_approximation"` means per-day totals are projected
+monthly rates from snapshots, not billed spend. Surface it when accuracy matters."""
 
 
 def _validate_date(value: str, field: str) -> date:
