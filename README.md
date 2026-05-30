@@ -20,7 +20,7 @@ flowchart LR
     U([User]) -->|"How much did I spend on AWS?"| CLI[insights-agent CLI<br/>Python 3.12]
     CLI --> G[LangGraph<br/>create_react_agent]
     G -->|"bind_tools"| LLM[Gemini 2.5 Flash]
-    LLM -->|"tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations]
+    LLM -->|"tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations / cost-trends]
     T -->|"GET /api/v1/* + X-API-Key"| GO[CloudOracle Go<br/>oracle serve]
     GO -->|"SQL"| DB[(PostgreSQL<br/>cost_snapshots)]
     GO -->|"data_source: snapshots_approximation / heuristic_rules"| T
@@ -29,10 +29,12 @@ flowchart LR
     CLI --> U
 ```
 
-The agent ships three tools: two cost endpoints (totals per provider, per-service
-breakdown) plus a savings-recommendations endpoint that answers "where can I save
-money?" from the rule-based analyzer. Setup, env vars, CLI usage, and the smoke
-test are documented in **[insights-agent/README.md](insights-agent/README.md)**.
+The agent ships four tools: two cost endpoints (totals per provider, per-service
+breakdown), a savings-recommendations endpoint that answers "where can I save
+money?" from the rule-based analyzer, and a cost-trends endpoint that answers "is
+my spend growing?" with a per-day series and a precomputed change summary. Setup,
+env vars, CLI usage, and the smoke test are documented in
+**[insights-agent/README.md](insights-agent/README.md)**.
 
 ## v2 — Quick start (current focus)
 
@@ -130,7 +132,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 
 - [X]  **Milestone 8.0** — Authenticated `/api/v1/cost-summary` and `/api/v1/cost-by-service` Go endpoints (X-API-Key, snapshot-derived totals with explicit `data_source` disclaimer, machine-readable error codes)
 - [X]  **Milestone 8.1** — Python `insights-agent` sibling: LangGraph `create_react_agent` graph with two CloudOracle tools, Gemini provider, pydantic-settings config, structlog matching the Go slog format, CLI with `--verbose` / `--json` flags, 92% test coverage with mocked LLM + mocked HTTP. See **[insights-agent/](insights-agent/README.md)**
-- [ ]  **Milestone 8.2** — Additional tools (in progress). Done: authenticated `GET /api/v1/recommendations` endpoint (rule-based savings findings with provider/severity filters, `data_source: heuristic_rules`) + `cloudoracle_recommendations` agent tool. Next: resources / trends tools
+- [ ]  **Milestone 8.2** — Additional tools (in progress). Done: authenticated `GET /api/v1/recommendations` (rule-based savings findings, `data_source: heuristic_rules`) + `cloudoracle_recommendations` tool; authenticated `GET /api/v1/cost-trends` (per-day series with precomputed change/direction, optional provider filter) + `cloudoracle_cost_trends` tool. Next: resources / inventory tool
 - [ ]  **Milestone 8.3** — pgvector + RAG over FinOps documentation
 - [ ]  **Milestone 8.4** — Hand-rolled supervisor (multi-agent), replacing `create_react_agent`
 - [ ]  **Milestone 8.5** — Production guardrails: cost caps, deterministic fallback, semantic answer validation, HTTP API surface

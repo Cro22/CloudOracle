@@ -74,6 +74,20 @@ RECOMMENDATIONS_OK: dict[str, Any] = {
     "note": "heuristic note",
 }
 
+TRENDS_OK: dict[str, Any] = {
+    "days": 90,
+    "points": [
+        {"date": "2026-03-01", "total_cost_usd": 200.0},
+        {"date": "2026-03-30", "total_cost_usd": 300.0},
+    ],
+    "first": {"date": "2026-03-01", "total_cost_usd": 200.0},
+    "latest": {"date": "2026-03-30", "total_cost_usd": 300.0},
+    "change": {"absolute_usd": 100.0, "percent_from_first": 50.0, "direction": "up"},
+    "generated_at": "2026-05-18T12:00:00Z",
+    "data_source": "snapshots_approximation",
+    "note": "approximation note",
+}
+
 
 class TestClientConstruction:
     def test_rejects_empty_base_url(self) -> None:
@@ -170,6 +184,32 @@ class TestRecommendationsHappyPath:
         assert b"provider=aws" in req.url.query
         assert b"severity=high" in req.url.query
         assert b"top=5" in req.url.query
+        await client.aclose()
+
+
+class TestCostTrendsHappyPath:
+    async def test_success_defaults(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=TRENDS_OK)
+        out = await client.cost_trends()
+        assert out == TRENDS_OK
+        req = httpx_mock.get_request()
+        assert req is not None
+        assert req.url.path == "/api/v1/cost-trends"
+        assert b"days=90" in req.url.query
+        assert b"provider=" not in req.url.query
+        await client.aclose()
+
+    async def test_params_include_days_and_provider(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=TRENDS_OK)
+        await client.cost_trends(days=30, provider="AWS")
+        req = httpx_mock.get_request()
+        assert req is not None
+        assert b"days=30" in req.url.query
+        assert b"provider=aws" in req.url.query
         await client.aclose()
 
 
@@ -323,9 +363,25 @@ class TestLocalValidation:
             await client.recommendations(top=201)
         await client.aclose()
 
+    async def test_cost_trends_days_out_of_range(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match=r"days=\d+ must be in"):
+            await client.cost_trends(days=0)
+        with pytest.raises(ValueError, match=r"days=\d+ must be in"):
+            await client.cost_trends(days=366)
+        await client.aclose()
+
+    async def test_cost_trends_invalid_provider(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match="must be one of"):
+            await client.cost_trends(provider="oracle-cloud")
+        await client.aclose()
+
 
 class TestBuildTools:
-    async def test_builds_three_tools_with_expected_names(
+    async def test_builds_four_tools_with_expected_names(
         self, client: CloudOracleClient
     ) -> None:
         tools = build_tools(client)
@@ -334,6 +390,7 @@ class TestBuildTools:
             "cloudoracle_cost_summary",
             "cloudoracle_cost_by_service",
             "cloudoracle_recommendations",
+            "cloudoracle_cost_trends",
         }
         await client.aclose()
 
@@ -348,6 +405,7 @@ class TestBuildTools:
         tools_by_name = {t.name: t for t in build_tools(client)}
         assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_summary"].description
         assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_by_service"].description
+        assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_trends"].description
         assert "heuristic_rules" in tools_by_name["cloudoracle_recommendations"].description
         await client.aclose()
 
@@ -405,4 +463,25 @@ class TestBuildTools:
         out = await rec_tool.ainvoke({"severity": "critical"})
         # handle_tool_error=True returns the error string as the observation.
         assert "must be one of" in str(out)
+        await client.aclose()
+
+    async def test_cost_trends_tool_invokes_client(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=TRENDS_OK)
+        trends_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_cost_trends"
+        )
+        out = await trends_tool.ainvoke({"days": 30, "provider": "aws"})
+        assert out == TRENDS_OK
+        await client.aclose()
+
+    async def test_cost_trends_tool_wraps_validation_error(
+        self, client: CloudOracleClient
+    ) -> None:
+        trends_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_cost_trends"
+        )
+        out = await trends_tool.ainvoke({"days": 9999})
+        assert "must be in" in str(out)
         await client.aclose()
