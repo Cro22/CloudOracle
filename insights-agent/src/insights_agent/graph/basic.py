@@ -65,6 +65,10 @@ class AgentResult:
     answer: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     messages: list[Any] = field(default_factory=list)
+    # Tool observations ({name, output}) gathered during the run. The supervisor
+    # graph populates these so the guardrails can ground the answer against what
+    # the tools actually returned. The simple graph leaves it empty.
+    observations: list[dict[str, Any]] = field(default_factory=list)
 
 
 def build_graph(llm: BaseChatModel, tools: Sequence[BaseTool]) -> Any:

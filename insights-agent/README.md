@@ -92,6 +92,30 @@ A hop cap (`MAX_HOPS`) bounds the supervisor loop so a model that never emits
 `finish` still terminates. The simpler single-agent graph (`graph/basic.py`,
 `create_react_agent`) is retained for tests and comparison.
 
+## Guardrails
+
+Production guardrails (milestone 8.5) wrap every run via
+`guardrails/runner.py:run_guarded`:
+
+- **Cost / usage caps** (`graph.supervisor.RunLimits`, from `MAX_*` env vars):
+  bound total tool calls, supervisor hops, and per-worker iterations. When a cap
+  is hit, the supervisor stops dispatching and synthesizes from what it has — a
+  confused or injected loop can't run up unbounded LLM/tool cost.
+- **Layered answer validation** (`guardrails/validation.py`):
+  1. *Deterministic grounding* — every monetary figure in the answer must match
+     (within tolerance) a number in the tool observations. An unmatched figure
+     is almost certainly fabricated → hard fail, no LLM needed.
+  2. *LLM judge* — when the deterministic layer passes but the answer makes
+     numeric claims (so there's something to get subtly wrong), an optional
+     judge model gives a second opinion grounded in the observations.
+- **Deterministic fallback** (`guardrails/fallback.py`): if the run throws
+  (quota, timeout) or validation rejects the answer, the user gets an honest,
+  no-LLM response that surfaces the raw tool data (or says nothing was
+  retrieved) instead of a fabricated narrative or a raw traceback.
+
+Toggle validation with `ENABLE_ANSWER_VALIDATION` / `ENABLE_LLM_JUDGE`. The
+`--json` CLI output includes `fallback_used` and the `validation` verdict.
+
 ## Setup in under 10 minutes
 
 ### 1 — Prerequisites
@@ -134,6 +158,11 @@ Required env vars (loaded by `pydantic-settings`, fail-fast at startup):
 | `EMBEDDINGS_MODEL`       | no       | `models/text-embedding-004`| Gemini embeddings model (free tier) |
 | `KNOWLEDGE_COLLECTION`   | no       | `finops_knowledge`         | pgvector collection name |
 | `RAG_TOP_K`              | no       | `4`                        | Chunks retrieved per knowledge query (1–20) |
+| `MAX_HOPS`               | no       | `6`                        | Supervisor decisions before forced synthesis |
+| `MAX_TOOL_CALLS`         | no       | `8`                        | Total tool calls per run (cost cap) |
+| `MAX_WORKER_ITERS`       | no       | `6`                        | ReAct iterations within one specialist |
+| `ENABLE_ANSWER_VALIDATION` | no     | `true`                     | Run the layered answer validation |
+| `ENABLE_LLM_JUDGE`       | no       | `true`                     | Add the LLM-judge layer on numeric answers |
 
 ### 4 — Run the CLI
 
@@ -284,6 +313,7 @@ embeddings API is needed.
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
 | Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the five methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
 | RAG                 | `src/insights_agent/rag/` + `tools/knowledge.py` | `corpus.py` loads + chunks the packaged markdown (offline-testable); `embeddings.py` mirrors the LLM-provider ABC for Gemini embeddings; `store.py` wraps pgvector; `ingest.py` is the `insights-agent-ingest` CLI; `knowledge.py` exposes `finops_knowledge_search`. Only wired in when `DATABASE_URL` is set. |
+| Guardrails          | `src/insights_agent/guardrails/` | `RunLimits` cost caps (in `graph/supervisor.py`); `validation.py` layered grounding + LLM judge; `fallback.py` no-LLM honest answer; `runner.py:run_guarded` ties run → validate → fallback. The single entry point the CLI and HTTP surface share. |
 | Graph (default)     | `src/insights_agent/graph/supervisor.py` | Hand-rolled `StateGraph`: tool-call-routing supervisor + three specialist workers (each a `_run_react` loop) + synthesizer, with a hop cap. The production path `main.py` wires. |
 | Graph (simple)      | `src/insights_agent/graph/basic.py` | `create_react_agent` single-agent graph. Retained for tests/comparison; `AgentResult` + `_stringify_content` live here and the supervisor reuses them. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |

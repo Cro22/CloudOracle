@@ -11,6 +11,8 @@ from __future__ import annotations
 from pydantic import Field, HttpUrl, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from insights_agent.graph.supervisor import RunLimits
+
 
 class Settings(BaseSettings):
     """Process-wide configuration.
@@ -45,6 +47,23 @@ class Settings(BaseSettings):
     embeddings_model: str = "models/text-embedding-004"
     knowledge_collection: str = "finops_knowledge"
     rag_top_k: int = Field(default=4, ge=1, le=20)
+
+    # Guardrails (milestone 8.5). Cost caps bound the work per query; the
+    # validation toggles control the layered answer check.
+    max_hops: int = Field(default=6, ge=1, le=50)
+    max_tool_calls: int = Field(default=8, ge=1, le=100)
+    max_worker_iters: int = Field(default=6, ge=1, le=50)
+    enable_answer_validation: bool = True
+    enable_llm_judge: bool = True
+
+    @property
+    def run_limits(self) -> RunLimits:
+        """Cost caps as the graph's RunLimits."""
+        return RunLimits(
+            max_hops=self.max_hops,
+            max_tool_calls=self.max_tool_calls,
+            max_worker_iters=self.max_worker_iters,
+        )
 
     @field_validator("log_level")
     @classmethod

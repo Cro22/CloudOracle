@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import operator
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
@@ -68,23 +69,40 @@ WORKER_TOOLS: dict[str, frozenset[str]] = {
     CONCEPT_EXPERT: frozenset({"finops_knowledge_search"}),
 }
 
-# Upper bound on supervisor decisions, so a model that never says `finish`
-# still terminates. Three workers + a finish is the expected worst case; the
-# cap sits above that as a safety net, not a normal path.
-MAX_HOPS = 6
+# Cost / usage caps (milestone 8.5). These bound the work a single query can do
+# so a confused model or a prompt-injected loop can't run up unbounded LLM /
+# tool cost. Defaults are generous enough for legitimate multi-step questions
+# and act as a safety net, not a normal path.
+DEFAULT_MAX_HOPS = 6  # supervisor decisions before forced synthesis
+DEFAULT_MAX_TOOL_CALLS = 8  # total tool calls across all workers in a run
+DEFAULT_MAX_WORKER_ITERS = 6  # ReAct iterations within one worker
 
-# Per-worker ReAct iterations (model call → tool calls → model call …).
-MAX_WORKER_ITERS = 6
+
+@dataclass(frozen=True)
+class RunLimits:
+    """Per-run guardrail caps. Construct from Settings in the wiring code."""
+
+    max_hops: int = DEFAULT_MAX_HOPS
+    max_tool_calls: int = DEFAULT_MAX_TOOL_CALLS
+    max_worker_iters: int = DEFAULT_MAX_WORKER_ITERS
+
+
+DEFAULT_LIMITS = RunLimits()
 
 
 class SupervisorState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     tool_calls: Annotated[list[dict[str, Any]], operator.add]
+    observations: Annotated[list[dict[str, Any]], operator.add]
     route: str
     hops: int
 
 
-def build_supervisor_graph(llm: BaseChatModel, tools: Sequence[BaseTool]) -> Any:
+def build_supervisor_graph(
+    llm: BaseChatModel,
+    tools: Sequence[BaseTool],
+    limits: RunLimits = DEFAULT_LIMITS,
+) -> Any:
     """Compile the supervisor graph over `tools` (the same flat tool list)."""
     tool_list = list(tools)
     routing_tools = _build_routing_tools()
@@ -97,7 +115,12 @@ def build_supervisor_graph(llm: BaseChatModel, tools: Sequence[BaseTool]) -> Any
         return {"route": route, "hops": state["hops"] + 1}
 
     def decide(state: SupervisorState) -> str:
-        if state["hops"] > MAX_HOPS:
+        # Cost caps: stop dispatching once we've spent the hop or tool-call
+        # budget, regardless of what the supervisor wants — then synthesize
+        # from whatever was gathered so the user still gets a grounded answer.
+        if state["hops"] > limits.max_hops:
+            return "synthesize"
+        if len(state["tool_calls"]) >= limits.max_tool_calls:
             return "synthesize"
         return state["route"] if state["route"] in WORKER_NAMES else "synthesize"
 
@@ -109,7 +132,7 @@ def build_supervisor_graph(llm: BaseChatModel, tools: Sequence[BaseTool]) -> Any
     graph.add_node("supervisor", supervisor)
     graph.add_node("synthesize", synthesize)
     for name in WORKER_NAMES:
-        graph.add_node(name, _make_worker_node(llm, tool_list, name))
+        graph.add_node(name, _make_worker_node(llm, tool_list, name, limits))
 
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges(
@@ -129,6 +152,7 @@ async def ask_supervisor(graph: Any, question: str) -> AgentResult:
         {
             "messages": [HumanMessage(content=question)],
             "tool_calls": [],
+            "observations": [],
             "route": "",
             "hops": 0,
         }
@@ -145,19 +169,33 @@ async def ask_supervisor(graph: Any, question: str) -> AgentResult:
         answer=answer,
         tool_calls=list(state.get("tool_calls", [])),
         messages=messages,
+        observations=list(state.get("observations", [])),
     )
 
 
 def _make_worker_node(
-    llm: BaseChatModel, tools: list[BaseTool], name: str
+    llm: BaseChatModel, tools: list[BaseTool], name: str, limits: RunLimits
 ) -> Any:
     system = _WORKER_PROMPTS[name]
     worker_tools = [t for t in tools if t.name in WORKER_TOOLS[name]]
 
     async def node(state: SupervisorState) -> dict[str, Any]:
-        answer, calls = await _run_react(llm, worker_tools, system, state["messages"])
+        # Don't exceed the run-wide tool-call budget across workers.
+        remaining = limits.max_tool_calls - len(state["tool_calls"])
+        answer, calls, observations = await _run_react(
+            llm,
+            worker_tools,
+            system,
+            state["messages"],
+            max_iters=limits.max_worker_iters,
+            tool_budget=max(0, remaining),
+        )
         contribution = AIMessage(content=answer or "(no findings)", name=name)
-        return {"messages": [contribution], "tool_calls": calls}
+        return {
+            "messages": [contribution],
+            "tool_calls": calls,
+            "observations": observations,
+        }
 
     return node
 
@@ -167,33 +205,47 @@ async def _run_react(
     tools: list[BaseTool],
     system_prompt: str,
     conversation: Sequence[BaseMessage],
-) -> tuple[str, list[dict[str, Any]]]:
+    *,
+    max_iters: int = DEFAULT_MAX_WORKER_ITERS,
+    tool_budget: int = DEFAULT_MAX_TOOL_CALLS,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """A minimal ReAct loop: the hand-rolled replacement for create_react_agent.
 
-    Returns the worker's final text plus the ordered {name, args} tool calls it
-    made (for --verbose / assertions). Tools already convert their own errors to
-    observations (handle_tool_error=True), so a failed tool feeds the model a
-    message instead of aborting the loop.
+    Returns the worker's final text, the ordered {name, args} tool calls it made
+    (for --verbose / assertions), and the {name, output} observations (for answer
+    grounding). Tools convert their own errors to observations
+    (handle_tool_error=True), so a failed tool feeds the model a message instead
+    of aborting the loop. `tool_budget` caps how many tool calls this worker may
+    actually execute; beyond it the model is told to wrap up.
     """
     model = llm.bind_tools(tools) if tools else llm
     by_name = {t.name: t for t in tools}
     messages: list[BaseMessage] = [SystemMessage(system_prompt), *conversation]
-    collected: list[dict[str, Any]] = []
+    calls_made: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
 
-    for _ in range(MAX_WORKER_ITERS):
+    for _ in range(max_iters):
         ai = await model.ainvoke(messages)
         messages.append(ai)
         calls = getattr(ai, "tool_calls", None) or []
         if not calls:
-            return _stringify_content(ai.content), collected
+            return _stringify_content(ai.content), calls_made, observations
 
         for call in calls:
-            collected.append({"name": call["name"], "args": call.get("args", {})})
-            tool = by_name.get(call["name"])
-            if tool is None:
-                observation: Any = f"error: unknown tool {call['name']!r}"
+            calls_made.append({"name": call["name"], "args": call.get("args", {})})
+            if len(calls_made) > tool_budget:
+                observation: Any = "tool budget reached; answer with what you have"
             else:
-                observation = await tool.ainvoke(call.get("args", {}))
+                tool = by_name.get(call["name"])
+                if tool is None:
+                    observation = f"error: unknown tool {call['name']!r}"
+                else:
+                    observation = await tool.ainvoke(call.get("args", {}))
+                    # Only real tool outputs are grounding evidence; unknown-tool
+                    # and budget messages are control signals, not data.
+                    observations.append(
+                        {"name": call["name"], "output": _to_text(observation)}
+                    )
             messages.append(
                 ToolMessage(
                     content=_to_text(observation),
@@ -204,7 +256,8 @@ async def _run_react(
 
     # Iteration budget exhausted — return whatever the last AI message said.
     last = messages[-1]
-    return (_stringify_content(last.content) if isinstance(last, AIMessage) else ""), collected
+    answer = _stringify_content(last.content) if isinstance(last, AIMessage) else ""
+    return answer, calls_made, observations
 
 
 def _to_text(value: Any) -> str:

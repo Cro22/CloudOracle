@@ -96,3 +96,32 @@ def test_rag_top_k_out_of_range_rejected(
     monkeypatch.setenv("RAG_TOP_K", "0")
     with pytest.raises(ValidationError):
         Settings()
+
+
+def test_guardrail_defaults_and_run_limits(valid_env: None) -> None:
+    s = Settings()
+    assert s.max_hops == 6
+    assert s.max_tool_calls == 8
+    assert s.max_worker_iters == 6
+    assert s.enable_answer_validation is True
+    assert s.enable_llm_judge is True
+    limits = s.run_limits
+    assert (limits.max_hops, limits.max_tool_calls, limits.max_worker_iters) == (6, 8, 6)
+
+
+def test_guardrail_caps_from_env(
+    valid_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MAX_TOOL_CALLS", "3")
+    monkeypatch.setenv("ENABLE_LLM_JUDGE", "false")
+    s = Settings()
+    assert s.run_limits.max_tool_calls == 3
+    assert s.enable_llm_judge is False
+
+
+def test_max_hops_out_of_range_rejected(
+    valid_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MAX_HOPS", "0")
+    with pytest.raises(ValidationError):
+        Settings()
