@@ -116,6 +116,31 @@ Production guardrails (milestone 8.5) wrap every run via
 Toggle validation with `ENABLE_ANSWER_VALIDATION` / `ENABLE_LLM_JUDGE`. The
 `--json` CLI output includes `fallback_used` and the `validation` verdict.
 
+## HTTP surface
+
+Besides the CLI, the agent runs as an HTTP service (FastAPI) over the same
+guarded pipeline — the CLI and the server share one `GeminiAgentRunner`
+(`runtime.py`), so behavior is identical.
+
+```bash
+uv run insights-agent-serve            # binds AGENT_HOST:AGENT_PORT (default 127.0.0.1:8099)
+```
+
+| Method & path | Body | Response |
+| ------------- | ---- | -------- |
+| `GET /health` | —    | `{"status": "ok"}` |
+| `POST /ask`   | `{"query": "..."}` | `{"answer", "tool_calls", "fallback_used", "validation"}` |
+
+```bash
+curl -sS -X POST localhost:8099/ask \
+     -H 'Content-Type: application/json' \
+     -d '{"query": "How much did I spend on AWS in April 2026?"}'
+```
+
+Set `AGENT_API_KEY` to require an `X-API-Key` header on `POST /ask` (same
+convention as the Go server); leave it empty for an open local endpoint. The
+agent stack is built once in the FastAPI lifespan and reused across requests.
+
 ## Setup in under 10 minutes
 
 ### 1 — Prerequisites
@@ -163,6 +188,9 @@ Required env vars (loaded by `pydantic-settings`, fail-fast at startup):
 | `MAX_WORKER_ITERS`       | no       | `6`                        | ReAct iterations within one specialist |
 | `ENABLE_ANSWER_VALIDATION` | no     | `true`                     | Run the layered answer validation |
 | `ENABLE_LLM_JUDGE`       | no       | `true`                     | Add the LLM-judge layer on numeric answers |
+| `AGENT_HOST`             | no       | `127.0.0.1`                | Bind host for `insights-agent-serve` |
+| `AGENT_PORT`             | no       | `8099`                     | Bind port for the HTTP surface |
+| `AGENT_API_KEY`          | no       | —                          | When set, `POST /ask` requires it in `X-API-Key` |
 
 ### 4 — Run the CLI
 
@@ -314,7 +342,9 @@ embeddings API is needed.
 | Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the five methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
 | RAG                 | `src/insights_agent/rag/` + `tools/knowledge.py` | `corpus.py` loads + chunks the packaged markdown (offline-testable); `embeddings.py` mirrors the LLM-provider ABC for Gemini embeddings; `store.py` wraps pgvector; `ingest.py` is the `insights-agent-ingest` CLI; `knowledge.py` exposes `finops_knowledge_search`. Only wired in when `DATABASE_URL` is set. |
 | Guardrails          | `src/insights_agent/guardrails/` | `RunLimits` cost caps (in `graph/supervisor.py`); `validation.py` layered grounding + LLM judge; `fallback.py` no-LLM honest answer; `runner.py:run_guarded` ties run → validate → fallback. The single entry point the CLI and HTTP surface share. |
-| Graph (default)     | `src/insights_agent/graph/supervisor.py` | Hand-rolled `StateGraph`: tool-call-routing supervisor + three specialist workers (each a `_run_react` loop) + synthesizer, with a hop cap. The production path `main.py` wires. |
+| Runtime             | `src/insights_agent/runtime.py` | `GeminiAgentRunner` assembles the model + client + tools + graph + limits once and exposes `ask()`. Shared by the CLI and HTTP so they behave identically. |
+| HTTP surface        | `src/insights_agent/api/` | `app.py` (FastAPI `create_app`, `GET /health`, `POST /ask`, optional `X-API-Key`); `serve.py` is the `insights-agent-serve` uvicorn entry. `create_app(runner=...)` injects a fake runner for offline tests. |
+| Graph (default)     | `src/insights_agent/graph/supervisor.py` | Hand-rolled `StateGraph`: tool-call-routing supervisor + three specialist workers (each a `_run_react` loop) + synthesizer, with a hop cap. Wired by `runtime.py`. |
 | Graph (simple)      | `src/insights_agent/graph/basic.py` | `create_react_agent` single-agent graph. Retained for tests/comparison; `AgentResult` + `_stringify_content` live here and the supervisor reuses them. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |
@@ -322,8 +352,6 @@ embeddings API is needed.
 
 ### What is **not** here yet
 
-- Cost caps, semantic answer validation, deterministic fallback (8.5)
-- HTTP API surface for the agent — CLI only until 8.5
 - Other LLM providers (Anthropic, OpenAI)
 - Streaming responses
 - Conversational memory across queries

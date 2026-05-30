@@ -24,15 +24,12 @@ import json
 import sys
 from typing import Any
 
-from langchain_core.tools import BaseTool
 from pydantic import ValidationError
 
 from insights_agent.config import Settings
-from insights_agent.graph.supervisor import build_supervisor_graph
-from insights_agent.guardrails.runner import GuardedResult, run_guarded
-from insights_agent.llm import GeminiProvider
+from insights_agent.guardrails.runner import GuardedResult
 from insights_agent.logging import get_logger, setup
-from insights_agent.tools.cloudoracle import CloudOracleClient, build_tools
+from insights_agent.runtime import GeminiAgentRunner
 
 EXIT_OK = 0
 EXIT_RUNTIME = 1
@@ -64,40 +61,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _maybe_build_knowledge_tool(settings: Settings, log: Any) -> BaseTool | None:
-    """Build the RAG knowledge tool when a pgvector DB is configured.
-
-    Returns None (and logs why) when database_url is unset, so the agent runs
-    with just the cost/inventory/recommendation tools and no DB dependency.
-    Imports are deferred so the heavier RAG/db stack is only loaded when used.
-    """
-    if not settings.database_url:
-        log.info("rag.disabled", reason="database_url not set")
-        return None
-
-    from insights_agent.rag.embeddings import GeminiEmbeddingsProvider
-    from insights_agent.rag.store import build_retriever, build_vector_store
-    from insights_agent.tools.knowledge import build_knowledge_tool
-
-    embeddings = GeminiEmbeddingsProvider(
-        api_key=settings.gemini_api_key,
-        model=settings.embeddings_model,
-    ).get_embeddings()
-    store = build_vector_store(
-        connection=settings.database_url,
-        embeddings=embeddings,
-        collection=settings.knowledge_collection,
-    )
-    retriever = build_retriever(store, k=settings.rag_top_k)
-    log.info(
-        "rag.enabled",
-        collection=settings.knowledge_collection,
-        embeddings_model=settings.embeddings_model,
-        top_k=settings.rag_top_k,
-    )
-    return build_knowledge_tool(retriever)
-
-
 async def _run(query: str, *, as_json: bool, verbose: bool) -> GuardedResult:
     # pydantic-settings populates required fields from the environment;
     # mypy's call-arg check doesn't understand env-based construction
@@ -112,27 +75,8 @@ async def _run(query: str, *, as_json: bool, verbose: bool) -> GuardedResult:
         base_url=settings.cloudoracle_base_url,
     )
 
-    provider = GeminiProvider(
-        api_key=settings.gemini_api_key,
-        model=settings.gemini_model,
-    )
-    chat_model = provider.get_chat_model()
-    async with CloudOracleClient(
-        base_url=settings.cloudoracle_base_url,
-        api_key=settings.cloudoracle_api_key,
-        timeout_seconds=settings.http_timeout_seconds,
-    ) as client:
-        tools: list[BaseTool] = list(build_tools(client))
-        knowledge_tool = _maybe_build_knowledge_tool(settings, log)
-        if knowledge_tool is not None:
-            tools.append(knowledge_tool)
-        graph = build_supervisor_graph(chat_model, tools, settings.run_limits)
-        result = await run_guarded(
-            graph,
-            query,
-            validate=settings.enable_answer_validation,
-            judge_model=chat_model if settings.enable_llm_judge else None,
-        )
+    async with GeminiAgentRunner(settings, log) as runner:
+        result = await runner.ask(query)
 
     if result.fallback_used:
         log.warning("fallback_used", error=result.error, validation=_validation_dict(result))

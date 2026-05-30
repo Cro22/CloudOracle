@@ -19,9 +19,9 @@ from insights_agent.main import (
     EXIT_OK,
     EXIT_RUNTIME,
     _build_arg_parser,
-    _maybe_build_knowledge_tool,
     cli_entrypoint,
 )
+from insights_agent.runtime import maybe_build_knowledge_tool
 
 
 def test_arg_parser_requires_query() -> None:
@@ -119,7 +119,7 @@ def test_knowledge_tool_disabled_without_database_url(valid_env: None) -> None:
     # the agent runs with just the cost/inventory/recommendation tools.
     settings = Settings()
     log = _SpyLog()
-    tool = _maybe_build_knowledge_tool(settings, log)
+    tool = maybe_build_knowledge_tool(settings, log)
     assert tool is None
     assert "rag.disabled" in log.events
 

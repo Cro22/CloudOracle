@@ -18,6 +18,8 @@ dependencies = [
     "httpx>=0.27.0",
     "structlog>=24.4.0",
     "python-dotenv>=1.0.1",
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +35,7 @@ dev = [
 [project.scripts]
 insights-agent = "insights_agent.main:cli_entrypoint"
 insights-agent-ingest = "insights_agent.rag.ingest:ingest_entrypoint"
+insights-agent-serve = "insights_agent.api.serve:serve_entrypoint"
 
 [build-system]
 requires = ["hatchling"]
@@ -53,6 +56,8 @@ filterwarnings = [
     # supervisor refactor in 8.4 replaces it. Silence the deprecation here
     # so the warning doesn't drown out real signal in the test output.
     "ignore::langgraph.warnings.LangGraphDeprecationWarning",
+    # Starlette's TestClient warns that it uses httpx; not actionable here.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
 ]
 
 [tool.coverage.run]
@@ -106,5 +111,6 @@ module = [
     "langchain_core.*",
     "langchain_postgres.*",
     "langchain_text_splitters.*",
+    "uvicorn.*",
 ]
 ignore_missing_imports = true

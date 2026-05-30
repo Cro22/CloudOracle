@@ -56,6 +56,12 @@ class Settings(BaseSettings):
     enable_answer_validation: bool = True
     enable_llm_judge: bool = True
 
+    # HTTP surface (milestone 8.5). agent_api_key, when set, gates POST /ask
+    # behind an X-API-Key header (same convention as the Go server).
+    agent_host: str = "127.0.0.1"
+    agent_port: int = Field(default=8099, ge=1, le=65535)
+    agent_api_key: str | None = None
+
     @property
     def run_limits(self) -> RunLimits:
         """Cost caps as the graph's RunLimits."""
