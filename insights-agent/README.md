@@ -6,11 +6,12 @@ LangGraph-based FinOps insights agent for CloudOracle. Ask in natural language
 language with the relevant caveats.
 
 Built on `create_react_agent` from `langgraph.prebuilt`: single-turn agent (no
-conversational memory), Gemini as the model, five tools wired against the Go
-`/api/v1` endpoints — two cost endpoints (milestone 8.1) plus savings
-recommendations, cost trends, and a resource-inventory endpoint (milestone 8.2).
-Future milestones replace the ReAct loop with a custom supervisor (8.4) and add
-RAG over FinOps docs (8.3).
+conversational memory), Gemini as the model. Five tools call the Go `/api/v1`
+endpoints — two cost endpoints (milestone 8.1) plus savings recommendations,
+cost trends, and a resource-inventory endpoint (milestone 8.2). A sixth tool,
+`finops_knowledge_search`, does RAG over a curated FinOps corpus stored in
+pgvector (milestone 8.3) for conceptual / policy / how-to questions. The next
+milestone replaces the ReAct loop with a custom supervisor (8.4).
 
 ## What it talks to
 
@@ -52,6 +53,12 @@ The agent surfaces these caveats when accuracy materially affects the answer.
 | `cloudoracle_recommendations` | "where can I save money?" (savings opportunities) | `GET /api/v1/recommendations` |
 | `cloudoracle_cost_trends`     | "is my spend growing?" (per-day series + change) | `GET /api/v1/cost-trends` |
 | `cloudoracle_inventory`       | "what do I have?" (counts + cost by provider/service) | `GET /api/v1/inventory` |
+| `finops_knowledge_search`     | "what is rightsizing?", "should I buy RIs?" (concepts/policy) | pgvector RAG over the FinOps corpus |
+
+`finops_knowledge_search` is only registered when `DATABASE_URL` points at a
+pgvector-enabled Postgres (see [Knowledge base (RAG)](#knowledge-base-rag)).
+Without it the five HTTP tools still work — the agent just can't answer
+conceptual questions from the corpus.
 
 ## Setup in under 10 minutes
 
@@ -91,6 +98,10 @@ Required env vars (loaded by `pydantic-settings`, fail-fast at startup):
 | `LOG_LEVEL`              | no       | `INFO`                     | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `LOG_FORMAT`             | no       | `text`                     | `text` or `json` — same shapes as the Go side |
 | `HTTP_TIMEOUT_SECONDS`   | no       | `10`                       | Per-request timeout against the Go server |
+| `DATABASE_URL`           | no       | —                          | pgvector URL; enables `finops_knowledge_search`. Unset = RAG off |
+| `EMBEDDINGS_MODEL`       | no       | `models/text-embedding-004`| Gemini embeddings model (free tier) |
+| `KNOWLEDGE_COLLECTION`   | no       | `finops_knowledge`         | pgvector collection name |
+| `RAG_TOP_K`              | no       | `4`                        | Chunks retrieved per knowledge query (1–20) |
 
 ### 4 — Run the CLI
 
@@ -119,6 +130,50 @@ Exit codes:
 | 1    | Unexpected runtime failure |
 | 2    | Configuration problem (missing env var, malformed URL, etc.) |
 | 130  | User cancelled with Ctrl-C |
+
+## Knowledge base (RAG)
+
+The `finops_knowledge_search` tool retrieves from a curated FinOps corpus
+(`src/insights_agent/knowledge/*.md`) embedded into pgvector. It answers
+conceptual / policy / how-to questions ("what is rightsizing?", "should I buy
+reserved instances?", "how accurate are these numbers?") that the HTTP tools
+can't — they fetch numbers, this fetches guidance with source citations.
+
+RAG is **optional**: with `DATABASE_URL` unset the agent runs with just the five
+HTTP tools. To enable it:
+
+1. **Use a pgvector-enabled Postgres.** The bundled `docker compose` stack uses
+   the `pgvector/pgvector:pg16` image (a drop-in for stock Postgres 16), so
+   `docker compose up` already gives you one.
+
+2. **Point the agent at it** in `.env`:
+
+   ```bash
+   DATABASE_URL=postgresql+psycopg://oracle:oracle_dev@localhost:5432/cloudoracle
+   ```
+
+3. **Ingest the corpus** (creates the `vector` extension + collection on first
+   run, embeds each chunk via Gemini, upserts into pgvector):
+
+   ```bash
+   uv run insights-agent-ingest            # add / refresh the corpus
+   uv run insights-agent-ingest --recreate # drop the collection first
+   ```
+
+4. **Ask a conceptual question:**
+
+   ```bash
+   uv run insights-agent --verbose "Should I rightsize before buying reserved instances?"
+   ```
+
+   With RAG on, `--verbose` shows a `finops_knowledge_search` call and the
+   answer cites the corpus. Re-run the ingester whenever the markdown changes;
+   editing the corpus does not require re-embedding unchanged files only if you
+   `--recreate`, otherwise new chunks are appended.
+
+The architecture deliberately keeps RAG in Python (where LangChain lives): the
+Go server stays a clean data API, and the agent owns embeddings + retrieval
+against the shared Postgres.
 
 ## Smoke test (end-to-end with real Gemini + Go server)
 
@@ -175,14 +230,18 @@ the unit tests already cover the pipeline with a mocked model.
 ```bash
 uv run pytest                  # unit tests + coverage (>80% threshold)
 uv run ruff check .            # lint
-uv run mypy src/               # strict type-check (passes on 11 files)
+uv run mypy src/               # strict type-check
+uv run insights-agent-ingest   # (needs DATABASE_URL) embed the FinOps corpus
 ```
 
-The tests never contact Gemini or a live Go server. `tests/test_graph.py`
-ships a `ScriptedChatModel` (a `BaseChatModel` subclass) that replays
-hand-written `AIMessage` sequences, and `pytest-httpx` mocks the Go
-endpoints. The two together let `create_react_agent` run its full
-ReAct loop deterministically — including the tool-error branch.
+The tests never contact Gemini, a live Go server, or Postgres.
+`tests/test_graph.py` ships a `ScriptedChatModel` (a `BaseChatModel` subclass)
+that replays hand-written `AIMessage` sequences, and `pytest-httpx` mocks the
+Go endpoints — together they let `create_react_agent` run its full ReAct loop
+deterministically. The RAG layer is tested offline too: `tests/test_corpus.py`
+checks chunking, and `tests/test_knowledge_tool.py` drives the real retrieval +
+citation path through an `InMemoryVectorStore` + `DeterministicFakeEmbedding`,
+so no pgvector or embeddings API is needed.
 
 ### Architecture pointers
 
@@ -190,6 +249,7 @@ ReAct loop deterministically — including the tool-error branch.
 | ------------------- | ------------- | --- |
 | Vendor-agnostic LLM | `src/insights_agent/llm/base.py` + `gemini.py` | ABC + one implementation. Add `AnthropicProvider` / `OpenAIProvider` later by implementing `LLMProvider`; no graph changes required. |
 | Tools               | `src/insights_agent/tools/cloudoracle.py` | `CloudOracleClient` owns the HTTP + auth + request-ID conventions; `build_tools(client)` wraps the five methods as `StructuredTool`s with rich docstrings so the LLM picks the right one. Errors flow as `ToolException` so the model sees them as observations and can recover instead of aborting the run. |
+| RAG                 | `src/insights_agent/rag/` + `tools/knowledge.py` | `corpus.py` loads + chunks the packaged markdown (offline-testable); `embeddings.py` mirrors the LLM-provider ABC for Gemini embeddings; `store.py` wraps pgvector; `ingest.py` is the `insights-agent-ingest` CLI; `knowledge.py` exposes `finops_knowledge_search`. Only wired in when `DATABASE_URL` is set. |
 | Graph               | `src/insights_agent/graph/basic.py` | `create_react_agent` from `langgraph.prebuilt` with a short system prompt. Milestone 8.4 replaces this with a hand-rolled supervisor. |
 | CLI                 | `src/insights_agent/main.py` | argparse, three flags, four exit codes, single async run. No conversational memory (each call is independent). |
 | Settings            | `src/insights_agent/config.py` | `pydantic-settings.BaseSettings` — fail-fast `ValidationError` at startup if any required env var is missing. |
@@ -197,7 +257,6 @@ ReAct loop deterministically — including the tool-error branch.
 
 ### What is **not** here yet
 
-- pgvector / RAG over FinOps docs (8.3)
 - Custom supervisor / multi-agent (8.4)
 - Cost caps, semantic answer validation, deterministic fallback (8.5)
 - HTTP API surface for the agent — CLI only until 8.5
