@@ -60,6 +60,8 @@ func (s *Server) buildHandler() http.Handler {
 		authed(http.HandlerFunc(s.handleCostSummary)))
 	mux.Handle("GET /api/v1/cost-by-service",
 		authed(http.HandlerFunc(s.handleCostByService)))
+	mux.Handle("GET /api/v1/recommendations",
+		authed(http.HandlerFunc(s.handleRecommendations)))
 
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "endpoint not found: "+r.Method+" "+r.URL.Path)

@@ -48,6 +48,32 @@ BY_SERVICE_OK: dict[str, Any] = {
     "note": "approximation note",
 }
 
+RECOMMENDATIONS_OK: dict[str, Any] = {
+    "recommendations": [
+        {
+            "resource_id": "i-aaa",
+            "provider": "aws",
+            "service": "ec2",
+            "resource_type": "t3.large",
+            "region": "us-east-1",
+            "rule": "ec2-idle",
+            "severity": "High",
+            "monthly_cost_usd": 300.0,
+            "monthly_savings_usd": 300.0,
+            "description": "idle instance",
+            "recommendation": "terminate it",
+        }
+    ],
+    "total_count": 1,
+    "returned_count": 1,
+    "total_monthly_savings_usd": 300.0,
+    "by_severity": {"High": 1},
+    "filters": {"provider": "aws", "severity": "high", "top": 20},
+    "generated_at": "2026-05-18T12:00:00Z",
+    "data_source": "heuristic_rules",
+    "note": "heuristic note",
+}
+
 
 class TestClientConstruction:
     def test_rejects_empty_base_url(self) -> None:
@@ -114,6 +140,36 @@ class TestCostByServiceHappyPath:
         assert req is not None
         assert b"provider=aws" in req.url.query
         assert b"top=7" in req.url.query
+        await client.aclose()
+
+
+class TestRecommendationsHappyPath:
+    async def test_success_no_filters(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=RECOMMENDATIONS_OK)
+        out = await client.recommendations()
+        assert out == RECOMMENDATIONS_OK
+        req = httpx_mock.get_request()
+        assert req is not None
+        assert req.url.path == "/api/v1/recommendations"
+        # Only top is sent when provider/severity are omitted.
+        assert b"top=20" in req.url.query
+        assert b"provider=" not in req.url.query
+        assert b"severity=" not in req.url.query
+        await client.aclose()
+
+    async def test_params_include_filters(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=RECOMMENDATIONS_OK)
+        await client.recommendations(provider="AWS", severity="High", top=5)
+        req = httpx_mock.get_request()
+        assert req is not None
+        # provider/severity normalized to lowercase before the request.
+        assert b"provider=aws" in req.url.query
+        assert b"severity=high" in req.url.query
+        assert b"top=5" in req.url.query
         await client.aclose()
 
 
@@ -244,23 +300,55 @@ class TestLocalValidation:
             await client.cost_by_service("2026-04-01", "2026-04-30", "aws", top=1001)
         await client.aclose()
 
+    async def test_recommendations_invalid_provider(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match="must be one of"):
+            await client.recommendations(provider="oracle-cloud")
+        await client.aclose()
+
+    async def test_recommendations_invalid_severity(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match="must be one of"):
+            await client.recommendations(severity="critical")
+        await client.aclose()
+
+    async def test_recommendations_top_out_of_range(
+        self, client: CloudOracleClient
+    ) -> None:
+        with pytest.raises(ValueError, match=r"top=\d+ must be in"):
+            await client.recommendations(top=0)
+        with pytest.raises(ValueError, match=r"top=\d+ must be in"):
+            await client.recommendations(top=201)
+        await client.aclose()
+
 
 class TestBuildTools:
-    async def test_builds_two_tools_with_expected_names(
+    async def test_builds_three_tools_with_expected_names(
         self, client: CloudOracleClient
     ) -> None:
         tools = build_tools(client)
         names = {t.name for t in tools}
-        assert names == {"cloudoracle_cost_summary", "cloudoracle_cost_by_service"}
+        assert names == {
+            "cloudoracle_cost_summary",
+            "cloudoracle_cost_by_service",
+            "cloudoracle_recommendations",
+        }
         await client.aclose()
 
     async def test_descriptions_mention_data_source(
         self, client: CloudOracleClient
     ) -> None:
-        tools = build_tools(client)
-        for t in tools:
+        # Every tool documents its data_source so the model knows which caveat
+        # to surface: the cost tools use snapshots_approximation, the
+        # recommendations tool uses heuristic_rules.
+        for t in build_tools(client):
             assert "data_source" in t.description
-            assert "snapshots_approximation" in t.description
+        tools_by_name = {t.name: t for t in build_tools(client)}
+        assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_summary"].description
+        assert "snapshots_approximation" in tools_by_name["cloudoracle_cost_by_service"].description
+        assert "heuristic_rules" in tools_by_name["cloudoracle_recommendations"].description
         await client.aclose()
 
     async def test_summary_tool_invokes_client(
@@ -292,4 +380,29 @@ class TestBuildTools:
             }
         )
         assert out == BY_SERVICE_OK
+        await client.aclose()
+
+    async def test_recommendations_tool_invokes_client(
+        self, client: CloudOracleClient, httpx_mock: HTTPXMock
+    ) -> None:
+        httpx_mock.add_response(json=RECOMMENDATIONS_OK)
+        rec_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_recommendations"
+        )
+        out = await rec_tool.ainvoke({"provider": "aws", "severity": "high", "top": 5})
+        assert out == RECOMMENDATIONS_OK
+        await client.aclose()
+
+    async def test_recommendations_tool_wraps_validation_error(
+        self, client: CloudOracleClient
+    ) -> None:
+        # A bad severity raises ValueError in the client; the tool wrapper must
+        # translate it to a ToolException so the ReAct loop can recover instead
+        # of aborting the run.
+        rec_tool = next(
+            t for t in build_tools(client) if t.name == "cloudoracle_recommendations"
+        )
+        out = await rec_tool.ainvoke({"severity": "critical"})
+        # handle_tool_error=True returns the error string as the observation.
+        assert "must be one of" in str(out)
         await client.aclose()
