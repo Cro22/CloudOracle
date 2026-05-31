@@ -1,0 +1,18 @@
+# Normalize line endings: LF in the repository and in the working tree on every
+# platform. Several tests (notably internal/diff's golden Markdown fixtures and
+# the narrative-prompt snapshot) compare output byte-for-byte, and the renderer
+# emits "\n". Without this, a Windows checkout with core.autocrlf=true rewrites
+# the fixtures to CRLF and the comparisons fail even though the content matches.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.woff  binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
