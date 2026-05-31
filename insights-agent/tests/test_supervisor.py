@@ -14,7 +14,7 @@ import pytest
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.embeddings import DeterministicFakeEmbedding
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool
 from langchain_core.vectorstores import InMemoryVectorStore
@@ -26,6 +26,7 @@ from insights_agent.graph.supervisor import (
     FINISH,
     RunLimits,
     _run_react,
+    _synthesis_input,
     _to_text,
     ask_supervisor,
     build_supervisor_graph,
@@ -220,6 +221,61 @@ async def test_tool_call_budget_forces_synthesis(
     assert "$150" in result.answer
     # The observation was captured for grounding.
     assert result.observations and result.observations[0]["name"] == "cloudoracle_cost_summary"
+    await client.aclose()
+
+
+class TestSynthesisInput:
+    """Regression for the synthesizer dropping the specialists' findings.
+
+    Worker contributions must reach the synthesizer as *material in a human
+    turn*, not as prior assistant turns — otherwise the model treats the answer
+    as already given and emits only a tiny follow-up, losing the numbers.
+    """
+
+    def test_includes_question_and_findings_as_human_turn(self) -> None:
+        messages = [
+            HumanMessage(content="How much did I spend on AWS?"),
+            AIMessage(content="AWS spend was $8662.07 (snapshots).", name=COST_ANALYST),
+            AIMessage(content="(no findings)", name="concept_expert"),
+        ]
+        out = _synthesis_input(messages)
+        assert isinstance(out, HumanMessage)
+        text = out.content
+        assert "How much did I spend on AWS?" in text
+        assert "$8662.07" in text
+        assert "[cost_analyst]" in text
+        # Empty/no-findings contributions are excluded.
+        assert "(no findings)" not in text
+        assert "Write the final answer" in text
+
+    def test_no_findings_placeholder(self) -> None:
+        out = _synthesis_input([HumanMessage(content="hi")])
+        assert "(no specialist findings)" in out.content
+
+
+async def test_synthesizer_receives_findings_not_replayed_ai_turns(
+    client: CloudOracleClient, httpx_mock: HTTPXMock
+) -> None:
+    # End-to-end at the graph level: the synthesizer's input must be a human
+    # turn carrying the worker's finding, not the worker AIMessage replayed.
+    httpx_mock.add_response(json=SUMMARY_PAYLOAD)
+    model = ScriptedChatModel(
+        script=[
+            _route(COST_ANALYST),
+            _call("cloudoracle_cost_summary", {"start": "2026-05-01", "end": "2026-05-31"}),
+            _say("AWS spend was $150 in the period."),
+            _route(FINISH),
+            _say("Final: you spent $150 on AWS."),
+        ]
+    )
+    graph = build_supervisor_graph(model, build_tools(client))
+    await ask_supervisor(graph, "AWS spend?")
+
+    # last_messages = the synthesize call's input: [System, Human(findings)].
+    assert model.last_messages is not None
+    last = model.last_messages[-1]
+    assert isinstance(last, HumanMessage)
+    assert "$150" in last.content
     await client.aclose()
 
 
