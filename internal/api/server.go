@@ -2,6 +2,7 @@ package api
 
 import (
 	"CloudOracle/internal/analyzer"
+	"CloudOracle/internal/billing"
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/shared"
@@ -16,8 +17,19 @@ import (
 
 type Server struct {
 	data    apiData
+	billing billing.Source
 	apiKey  string
 	handler http.Handler
+}
+
+// ServerOption customizes a Server at construction. WithBillingSource swaps the
+// default snapshot-derived cost source for another billing.Source (e.g. the AWS
+// Cost Explorer source) so the v1 cost endpoints serve real billed cost.
+type ServerOption func(*Server)
+
+// WithBillingSource overrides the cost data source the v1 endpoints use.
+func WithBillingSource(src billing.Source) ServerOption {
+	return func(s *Server) { s.billing = src }
 }
 
 // NewServer wires the production handler: legacy `/api/*` dashboard
@@ -25,19 +37,25 @@ type Server struct {
 // the new `/api/v1/*` endpoints sit behind authMiddleware so only the
 // insights-agent — or any client that holds the configured API key —
 // can reach them.
-func NewServer(pool *db.Pool, apiCfg config.APIConfig) *Server {
-	return newServerWithData(&pgxAdapter{pool: pool}, apiCfg.Key)
+func NewServer(pool *db.Pool, apiCfg config.APIConfig, opts ...ServerOption) *Server {
+	return newServerWithData(&pgxAdapter{pool: pool}, apiCfg.Key, opts...)
 }
 
 // newTestServer builds a Server with a caller-supplied apiData so unit tests
 // can exercise the handlers without a live database. Production must go
 // through NewServer.
-func newTestServer(data apiData, apiKey string) *Server {
-	return newServerWithData(data, apiKey)
+func newTestServer(data apiData, apiKey string, opts ...ServerOption) *Server {
+	return newServerWithData(data, apiKey, opts...)
 }
 
-func newServerWithData(data apiData, apiKey string) *Server {
+func newServerWithData(data apiData, apiKey string, opts ...ServerOption) *Server {
 	s := &Server{data: data, apiKey: apiKey}
+	// Default cost source: the snapshot approximation. WithBillingSource can
+	// swap in a real billing integration.
+	s.billing = newSnapshotSource(data)
+	for _, opt := range opts {
+		opt(s)
+	}
 	s.handler = s.buildHandler()
 	return s
 }
