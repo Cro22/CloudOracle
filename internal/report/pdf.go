@@ -70,7 +70,7 @@ func GeneratePDF(findings []shared.Finding, aiSummary string, outputPath string)
 		severityCounts[shared.SeverityLow]))
 	pdf.Ln(12)
 
-	// === AI EXECUTIVE SUMMARY (si está disponible) ===
+	// === AI EXECUTIVE SUMMARY (if available) ===
 	if aiSummary != "" {
 		pdf.SetFont("Arial", "B", 14)
 		pdf.SetTextColor(30, 30, 30)
@@ -154,7 +154,7 @@ func GeneratePDF(findings []shared.Finding, aiSummary string, outputPath string)
 		)
 		pdf.MultiCell(0, 5, title, "", "L", false)
 
-		// Descripción del problema
+		// Issue description
 		pdf.SetFont("Arial", "", 9)
 		pdf.SetTextColor(80, 80, 80)
 		pdf.MultiCell(0, 5, "Issue: "+f.Description, "", "L", false)

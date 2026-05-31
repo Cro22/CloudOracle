@@ -55,9 +55,9 @@ func newTestGCPProvider() *GCPProvider {
 	}
 }
 
-// TestGCPFetchComputeInstances_MapsZoneToRegion verifica el mapeo no obvio
-// zone -> region: "us-central1-a" debe convertirse en "us-central1". Es un
-// detalle facil de romper si alguien cambia extractRegionFromZone.
+// TestGCPFetchComputeInstances_MapsZoneToRegion verifies the non-obvious
+// zone -> region mapping: "us-central1-a" must become "us-central1". It's a
+// detail that's easy to break if someone changes extractRegionFromZone.
 func TestGCPFetchComputeInstances_MapsZoneToRegion(t *testing.T) {
 	zone := "https://www.googleapis.com/compute/v1/projects/test-project/zones/us-central1-a"
 	machineType := "https://www.googleapis.com/compute/v1/projects/test-project/zones/us-central1-a/machineTypes/n2-standard-4"
@@ -137,8 +137,8 @@ func TestGCPFetchCloudSQL_Mapping(t *testing.T) {
 	}
 }
 
-// TestGCPFetchCloudSQL_NilSettings cubre el caso en el que la API devuelve
-// una instancia sin Settings (proxima al borrado). El mapeador no debe paniquear.
+// TestGCPFetchCloudSQL_NilSettings covers the case where the API returns an
+// instance with no Settings (about to be deleted). The mapper must not panic.
 func TestGCPFetchCloudSQL_NilSettings(t *testing.T) {
 	p := newTestGCPProvider()
 	p.sql = &fakeGCPSQL{
@@ -215,8 +215,8 @@ func TestGCPFetchCloudFunctions_Mapping(t *testing.T) {
 	}
 }
 
-// TestGCPFetchResources_GracefulDegradation verifica que cuando un servicio
-// (Cloud SQL aqui) falla, los demas todavia entregan recursos.
+// TestGCPFetchResources_GracefulDegradation verifies that when one service
+// (Cloud SQL here) fails, the others still deliver resources.
 func TestGCPFetchResources_GracefulDegradation(t *testing.T) {
 	zone := "projects/test/zones/us-central1-a"
 	machineType := "projects/test/zones/us-central1-a/machineTypes/e2-small"

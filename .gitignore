@@ -38,3 +38,5 @@ web/dist/
 # go:embed has a valid target, but ignore the generated assets.
 /internal/api/dist/*
 !/internal/api/dist/.gitkeep
+
+.claude

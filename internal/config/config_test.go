@@ -17,6 +17,7 @@ func allConfigEnvVars() []string {
 		"GOOGLE_CLOUD_PROJECT", "AZURE_SUBSCRIPTION_ID",
 		"SYNTHETIC_COUNT", "SYNTHETIC_ACCOUNT",
 		"LLM_PROVIDER", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LLM_TIMEOUT",
+		"CLOUDORACLE_API_KEY", "CLOUDORACLE_API_PORT", "CLOUDORACLE_API_SHUTDOWN_TIMEOUT",
 		"CLOUD_SERVICE_TIMEOUT", "LOG_LEVEL", "LOG_FORMAT",
 	}
 }
@@ -326,6 +327,51 @@ func TestDSN(t *testing.T) {
 	if cfg.DSN() != want {
 		t.Errorf("DSN mismatch: got %s, want %s", cfg.DSN(), want)
 	}
+}
+
+// API config has its own defaults and is intentionally not validated as
+// "required" at Load time — only the `serve` subcommand checks Key.
+func TestLoad_APIConfig_Defaults(t *testing.T) {
+	clearAll(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.Key != "" {
+		t.Errorf("API.Key should be empty by default, got %q", cfg.API.Key)
+	}
+	if cfg.API.Port != "8080" {
+		t.Errorf("API.Port = %q, want 8080", cfg.API.Port)
+	}
+	if cfg.API.ShutdownTimeout != 10*time.Second {
+		t.Errorf("API.ShutdownTimeout = %v, want 10s", cfg.API.ShutdownTimeout)
+	}
+}
+
+func TestLoad_APIConfig_CustomValues(t *testing.T) {
+	clearAll(t)
+	t.Setenv("CLOUDORACLE_API_KEY", "secret-123")
+	t.Setenv("CLOUDORACLE_API_PORT", "9090")
+	t.Setenv("CLOUDORACLE_API_SHUTDOWN_TIMEOUT", "45s")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.Key != "secret-123" || cfg.API.Port != "9090" {
+		t.Errorf("API fields not picked up: %+v", cfg.API)
+	}
+	if cfg.API.ShutdownTimeout != 45*time.Second {
+		t.Errorf("API.ShutdownTimeout = %v, want 45s", cfg.API.ShutdownTimeout)
+	}
+}
+
+func TestLoad_InvalidAPIPort(t *testing.T) {
+	loadInvalid(t, "CLOUDORACLE_API_PORT", "notanumber", "CLOUDORACLE_API_PORT")
+}
+
+func TestLoad_InvalidAPIShutdownTimeout(t *testing.T) {
+	loadInvalid(t, "CLOUDORACLE_API_SHUTDOWN_TIMEOUT", "0s", "greater than zero")
 }
 
 func TestGetEnv_DefaultBehavior(t *testing.T) {

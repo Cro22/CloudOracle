@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector image = stock Postgres 16 + the `vector` extension, needed by
+    # the insights-agent RAG store (milestone 8.3). Drop-in for postgres:16.
+    image: pgvector/pgvector:pg16
     container_name: cloudoracle-db
     environment:
       POSTGRES_USER: oracle

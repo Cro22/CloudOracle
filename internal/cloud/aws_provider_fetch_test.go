@@ -66,9 +66,9 @@ func newTestAWSProvider(ec2c ec2APIClient, rdsc rdsAPIClient, lc lambdaAPIClient
 
 func strP(s string) *string { return &s }
 
-// TestFetchEC2Instances_Pagination verifica que el paginator del SDK consume
-// todas las paginas, no solo la primera. Es exactamente el bug que se introduce
-// si alguien refactoriza el fetcher y olvida llamar HasMorePages en bucle.
+// TestFetchEC2Instances_Pagination verifies that the SDK paginator consumes
+// every page, not just the first. It catches exactly the bug introduced if
+// someone refactors the fetcher and forgets to call HasMorePages in a loop.
 func TestFetchEC2Instances_Pagination(t *testing.T) {
 	page1Time := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
 	page2Time := time.Date(2026, 3, 2, 0, 0, 0, 0, time.UTC)
@@ -207,9 +207,9 @@ func TestFetchRDSInstances_FetchesTagsPerInstance(t *testing.T) {
 	}
 }
 
-// TestFetchLambdaFunctions_TagFailureDoesNotAbort verifica que un error en
-// ListTags para una funcion individual no aborta el fetch — la funcion entra
-// con tags=nil y el resto del scan continua.
+// TestFetchLambdaFunctions_TagFailureDoesNotAbort verifies that an error on
+// ListTags for an individual function does not abort the fetch — the function
+// is included with tags=nil and the rest of the scan keeps going.
 func TestFetchLambdaFunctions_TagFailureDoesNotAbort(t *testing.T) {
 	lc := &fakeLambda{
 		listFunctions: func(context.Context, *lambda.ListFunctionsInput) (*lambda.ListFunctionsOutput, error) {
@@ -240,9 +240,9 @@ func TestFetchLambdaFunctions_TagFailureDoesNotAbort(t *testing.T) {
 	}
 }
 
-// TestFetchResources_GracefulDegradation verifica el contrato clave del provider:
-// si UN servicio falla, los demas siguen entregando recursos. Esto es lo que
-// hace que un outage regional de RDS no rompa el scan completo.
+// TestFetchResources_GracefulDegradation verifies the provider's key contract:
+// if ONE service fails, the others keep delivering resources. This is what
+// keeps a regional RDS outage from breaking the whole scan.
 func TestFetchResources_GracefulDegradation(t *testing.T) {
 	now := time.Now()
 
@@ -307,9 +307,9 @@ func TestFetchResources_GracefulDegradation(t *testing.T) {
 	}
 }
 
-// TestFetchResources_AllServicesFail confirma que cuando todo falla,
-// FetchResources devuelve nil sin panic — el caller recibe una lista vacia,
-// no un crash.
+// TestFetchResources_AllServicesFail confirms that when everything fails,
+// FetchResources returns nil without panicking — the caller gets an empty
+// list, not a crash.
 func TestFetchResources_AllServicesFail(t *testing.T) {
 	failEC2 := &fakeEC2{
 		describeInstances: func(context.Context, *ec2.DescribeInstancesInput) (*ec2.DescribeInstancesOutput, error) {
