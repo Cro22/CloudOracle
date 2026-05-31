@@ -6,7 +6,7 @@ A Go FinOps toolkit that ships in two modes from the same `oracle` binary, with 
 
 - **v1 — Audit existing cloud spend.** Ingest live EC2/RDS/EBS/Lambda inventory from AWS, GCP, or Azure into Postgres, run deterministic rules over it, and produce an executive PDF + dashboard with an LLM-narrated summary. See **[docs/v1-guide.md](docs/v1-guide.md)**.
 - **v2 — Predict cost impact of a Terraform PR before merge.** Read `terraform show -json plan.tfplan`, look every changing resource up against the AWS Pricing API, and post (or upsert) a Markdown comment on the PR with the net monthly delta, top movers, and a 1–3 sentence LLM narrative. Ships as a GitHub Action and as the `oracle pr-check` subcommand. **Current focus.** See **[docs/v2-guide.md](docs/v2-guide.md)**.
-- **v3 — Insights Agent (in progress).** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — LangGraph orchestration, RAG over FinOps documentation, multi-agent supervisor pattern, and production guardrails. See **[AI Insights Agent](#ai-insights-agent)** below and **[insights-agent/README.md](insights-agent/README.md)**.
+- **v3 — Insights Agent.** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — a hand-rolled LangGraph supervisor over specialist agents, RAG over a FinOps corpus (pgvector), production guardrails, real billing via AWS Cost Explorer, and a CLI + HTTP surface. See **[docs/v3-guide.md](docs/v3-guide.md)**, **[AI Insights Agent](#ai-insights-agent)** below, and **[insights-agent/README.md](insights-agent/README.md)**.
 
 ## AI Insights Agent
 
@@ -125,6 +125,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 
 ## Documentation
 
+- **[docs/v3-guide.md](docs/v3-guide.md)** — Insights Agent: architecture (supervisor, RAG, guardrails), the `/api/v1` contract + `data_source` semantics, real billing, and how to run the CLI/HTTP surface
 - **[docs/v2-guide.md](docs/v2-guide.md)** — Terraform PR cost analysis (Action inputs, CLI flags, exit codes, supported resources)
 - **[docs/v1-guide.md](docs/v1-guide.md)** — Cloud cost audit walkthrough (seed, analyze, PDF, dashboard, LLM setup, sample output)
 - **[docs/architecture.md](docs/architecture.md)** — v1/v2 internal layout, analyzer + LLM provider design, architecture decisions, lessons learned
