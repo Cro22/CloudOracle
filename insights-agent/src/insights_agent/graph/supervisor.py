@@ -125,7 +125,13 @@ def build_supervisor_graph(
         return state["route"] if state["route"] in WORKER_NAMES else "synthesize"
 
     async def synthesize(state: SupervisorState) -> dict[str, Any]:
-        resp = await llm.ainvoke([SystemMessage(_SYNTHESIZE_PROMPT), *state["messages"]])
+        # Present the specialists' findings as *material to synthesize from* in a
+        # human turn — not as prior assistant turns. If we replayed the worker
+        # AIMessages directly, the model treats the answer as already given and
+        # only appends a tiny follow-up, dropping the actual numbers.
+        resp = await llm.ainvoke(
+            [SystemMessage(_SYNTHESIZE_PROMPT), _synthesis_input(state["messages"])]
+        )
         return {"messages": [resp]}
 
     graph = StateGraph(SupervisorState)
@@ -144,6 +150,32 @@ def build_supervisor_graph(
         graph.add_edge(name, "supervisor")
     graph.add_edge("synthesize", END)
     return graph.compile()
+
+
+def _synthesis_input(messages: Sequence[BaseMessage]) -> HumanMessage:
+    """Build the synthesizer's input: the user question plus the specialists'
+    findings, as a single human turn the model answers fresh."""
+    question = ""
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            question = _stringify_content(m.content)
+            break
+
+    findings: list[str] = []
+    for m in messages:
+        if isinstance(m, AIMessage) and getattr(m, "name", None) in WORKER_NAMES:
+            text = _stringify_content(m.content).strip()
+            if text and text != "(no findings)":
+                findings.append(f"[{m.name}] {text}")
+    findings_block = "\n\n".join(findings) if findings else "(no specialist findings)"
+
+    return HumanMessage(
+        content=(
+            f"User question:\n{question}\n\n"
+            f"Specialist findings:\n{findings_block}\n\n"
+            "Write the final answer to the user now."
+        )
+    )
 
 
 async def ask_supervisor(graph: Any, question: str) -> AgentResult:
