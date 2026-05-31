@@ -2,13 +2,31 @@
 
 ![Tests](https://img.shields.io/badge/tests-469%20unit%20%2B%2021%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
-A Go FinOps toolkit that ships in two modes from the same `oracle` binary, with a polyglot agent extension in progress:
+**One FinOps toolkit, three surfaces over the same cost data** — audit what you spend, predict what a PR will cost, and ask about both in plain language.
+
+```mermaid
+flowchart LR
+    SRC["Cloud accounts · AWS · GCP · Azure<br/>+ Terraform plans"]
+
+    subgraph SYS["CloudOracle — one FinOps toolkit"]
+      direction TB
+      V1["v1 — Audit<br/>ingest live spend, run rules<br/>→ executive PDF + dashboard"]
+      V2["v2 — PR check<br/>price a Terraform plan pre-merge<br/>→ GitHub PR cost comment"]
+      V3["v3 — Insights Agent<br/>ask FinOps questions in plain language<br/>→ natural-language answers"]
+    end
+
+    SRC --> V1
+    SRC --> V2
+    V1 -. cost data .-> V3
+```
+
+A Go FinOps toolkit spanning three modes — two from the same `oracle` binary, plus a polyglot Python agent extension:
 
 - **v1 — Audit existing cloud spend.** Ingest live EC2/RDS/EBS/Lambda inventory from AWS, GCP, or Azure into Postgres, run deterministic rules over it, and produce an executive PDF + dashboard with an LLM-narrated summary. See **[docs/v1-guide.md](docs/v1-guide.md)**.
 - **v2 — Predict cost impact of a Terraform PR before merge.** Read `terraform show -json plan.tfplan`, look every changing resource up against the AWS Pricing API, and post (or upsert) a Markdown comment on the PR with the net monthly delta, top movers, and a 1–3 sentence LLM narrative. Ships as a GitHub Action and as the `oracle pr-check` subcommand. See **[docs/v2-guide.md](docs/v2-guide.md)**.
-- **v3 — Insights Agent.** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — a hand-rolled LangGraph supervisor over specialist agents, RAG over a FinOps corpus (pgvector), production guardrails, real billing via AWS Cost Explorer, and a CLI + HTTP surface. **Current focus.** See **[v3 — Insights Agent](#v3--insights-agent-current-focus)** below, **[docs/v3-guide.md](docs/v3-guide.md)**, and **[insights-agent/README.md](insights-agent/README.md)**.
+- **v3 — Insights Agent.** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — a hand-rolled LangGraph supervisor over specialist agents, RAG over a FinOps corpus (pgvector), production guardrails, real billing via AWS Cost Explorer, and a CLI + HTTP surface. See **[v3 — Insights Agent](#v3--insights-agent)** below, **[docs/v3-guide.md](docs/v3-guide.md)**, and **[insights-agent/README.md](insights-agent/README.md)**.
 
-## v3 — Insights Agent (current focus)
+## v3 — Insights Agent
 
 A Python sibling of the Go server that lets you ask FinOps questions in
 natural language. The agent decides which `/api/v1` endpoint to call, fetches
