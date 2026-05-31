@@ -3,6 +3,7 @@ package main
 import (
 	"CloudOracle/internal/analyzer"
 	"CloudOracle/internal/api"
+	"CloudOracle/internal/billing"
 	"CloudOracle/internal/cloud"
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
@@ -22,8 +23,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -84,7 +87,7 @@ func main() {
 	case "export":
 		runExport(ctx, pool, os.Args[2:])
 	case "serve":
-		runServe(pool, os.Args[2:])
+		runServe(ctx, pool, cfg, os.Args[2:])
 	default:
 		fmt.Printf("Unknown command: %s\n", os.Args[1])
 		printUsage()
@@ -675,18 +678,45 @@ func renderPRCheckMarkdown(ctx context.Context, cfg config.Config, d diff.CostDi
 	return diff.RenderMarkdownWithLLM(ctx, d, provider)
 }
 
-func runServe(pool *db.Pool, args []string) {
+func runServe(ctx context.Context, pool *db.Pool, cfg config.Config, args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
-	port := fs.String("port", "8080", "Port to listen on")
+	port := fs.String("port", cfg.API.Port, "Port to listen on")
 	if err := fs.Parse(args); err != nil {
 		slog.Error("failed to parse flags", "error", err)
 		os.Exit(1)
 	}
 
-	server := api.NewServer(pool)
+	// The v1 endpoints are gated by X-API-Key; refusing to start when the
+	// key is unset is preferable to silently exposing the dashboard
+	// endpoints with the v1 routes returning 401 — operators would assume
+	// "it's running" and miss the misconfiguration.
+	if cfg.API.Key == "" {
+		slog.Error("CLOUDORACLE_API_KEY is required to start the API server")
+		os.Exit(1)
+	}
+
+	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var serverOpts []api.ServerOption
+	if cfg.API.BillingProvider == config.BillingAWSCostExplorer {
+		src, err := billing.NewAWSCostExplorerSource(runCtx, cfg.Cloud.AWSRegion, cfg.Cloud.AWSProfile)
+		if err != nil {
+			// Don't fail startup over a billing-source problem: fall back to the
+			// snapshot approximation so the API still serves, and make the
+			// degradation loud.
+			slog.Warn("falling back to snapshot cost source: AWS Cost Explorer init failed", "error", err)
+		} else {
+			slog.Info("v1 cost endpoints using AWS Cost Explorer (real billed cost)")
+			serverOpts = append(serverOpts, api.WithBillingSource(src))
+		}
+	}
+
+	server := api.NewServer(pool, cfg.API, serverOpts...)
 	slog.Info("Dashboard available", "url", fmt.Sprintf("http://localhost:%s", *port))
-	if err := server.Start(":" + *port); err != nil {
+	if err := server.Run(runCtx, ":"+*port, cfg.API.ShutdownTimeout); err != nil {
 		slog.Error("API server failed", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("API server stopped cleanly")
 }

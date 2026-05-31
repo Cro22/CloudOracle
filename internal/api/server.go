@@ -2,8 +2,12 @@ package api
 
 import (
 	"CloudOracle/internal/analyzer"
+	"CloudOracle/internal/billing"
+	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/shared"
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -12,39 +16,124 @@ import (
 )
 
 type Server struct {
-	pool    *db.Pool
+	data    apiData
+	billing billing.Source
+	apiKey  string
 	handler http.Handler
 }
 
-func NewServer(pool *db.Pool) *Server {
-	s := &Server{pool: pool}
+// ServerOption customizes a Server at construction. WithBillingSource swaps the
+// default snapshot-derived cost source for another billing.Source (e.g. the AWS
+// Cost Explorer source) so the v1 cost endpoints serve real billed cost.
+type ServerOption func(*Server)
 
+// WithBillingSource overrides the cost data source the v1 endpoints use.
+func WithBillingSource(src billing.Source) ServerOption {
+	return func(s *Server) { s.billing = src }
+}
+
+// NewServer wires the production handler: legacy `/api/*` dashboard
+// endpoints stay open (they're consumed by the embedded React UI), and
+// the new `/api/v1/*` endpoints sit behind authMiddleware so only the
+// insights-agent — or any client that holds the configured API key —
+// can reach them.
+func NewServer(pool *db.Pool, apiCfg config.APIConfig, opts ...ServerOption) *Server {
+	return newServerWithData(&pgxAdapter{pool: pool}, apiCfg.Key, opts...)
+}
+
+// newTestServer builds a Server with a caller-supplied apiData so unit tests
+// can exercise the handlers without a live database. Production must go
+// through NewServer.
+func newTestServer(data apiData, apiKey string, opts ...ServerOption) *Server {
+	return newServerWithData(data, apiKey, opts...)
+}
+
+func newServerWithData(data apiData, apiKey string, opts ...ServerOption) *Server {
+	s := &Server{data: data, apiKey: apiKey}
+	// Default cost source: the snapshot approximation. WithBillingSource can
+	// swap in a real billing integration.
+	s.billing = newSnapshotSource(data)
+	for _, opt := range opts {
+		opt(s)
+	}
+	s.handler = s.buildHandler()
+	return s
+}
+
+func (s *Server) buildHandler() http.Handler {
 	mux := http.NewServeMux()
+
+	// v0 dashboard endpoints — left unauthenticated to match the existing
+	// React UI which is served from the same binary and assumes local trust.
 	mux.HandleFunc("GET /api/resources", s.handleResources)
 	mux.HandleFunc("GET /api/findings", s.handleFindings)
 	mux.HandleFunc("GET /api/trends", s.handleTrends)
 	mux.HandleFunc("GET /api/summary", s.handleSummary)
+
+	// v1 endpoints for the insights-agent — gated by X-API-Key so the
+	// surface area an agent can reach is explicitly auth'd. Sit on
+	// /api/v1/* so the dashboard endpoints can evolve independently.
+	authed := authMiddleware(s.apiKey)
+	mux.Handle("GET /api/v1/cost-summary",
+		authed(http.HandlerFunc(s.handleCostSummary)))
+	mux.Handle("GET /api/v1/cost-by-service",
+		authed(http.HandlerFunc(s.handleCostByService)))
+	mux.Handle("GET /api/v1/recommendations",
+		authed(http.HandlerFunc(s.handleRecommendations)))
+	mux.Handle("GET /api/v1/cost-trends",
+		authed(http.HandlerFunc(s.handleCostTrends)))
+	mux.Handle("GET /api/v1/inventory",
+		authed(http.HandlerFunc(s.handleInventory)))
+
 	mux.HandleFunc("GET /api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "endpoint not found: "+r.Method+" "+r.URL.Path)
 	})
 	mux.Handle("GET /", staticHandler())
 
-	s.handler = corsMiddleware(loggingMiddleware(mux))
-	return s
+	return corsMiddleware(requestIDMiddleware(loggingMiddleware(mux)))
 }
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-func (s *Server) Start(addr string) error {
-	slog.Info("starting API server", "addr", addr)
+// Run starts the HTTP server on addr and blocks until ctx is cancelled.
+// On cancellation it triggers http.Server.Shutdown with the configured
+// timeout. Returns nil on a clean shutdown, the listener error otherwise.
+//
+// We pattern-match the canonical Go shutdown idiom (goroutine + select on
+// errCh / ctx.Done) so SIGINT/SIGTERM forwarded by the parent context land
+// in Shutdown rather than abruptly killing in-flight requests — the agent
+// flow in insights-agent/ can take a few seconds on a slow LLM response.
+func (s *Server) Run(ctx context.Context, addr string, shutdownTimeout time.Duration) error {
 	srv := &http.Server{
 		Addr:              addr,
 		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	return srv.ListenAndServe()
+
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("starting API server", "addr", addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	select {
+	case err := <-errCh:
+		return err
+	case <-ctx.Done():
+		slog.Info("shutting down API server", "timeout", shutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		return nil
+	}
 }
 
 type resourcesResponse struct {
@@ -54,7 +143,7 @@ type resourcesResponse struct {
 }
 
 func (s *Server) handleResources(w http.ResponseWriter, r *http.Request) {
-	resources, err := db.ListResources(r.Context(), s.pool)
+	resources, err := s.data.ListResources(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list resources: "+err.Error())
 		return
@@ -89,7 +178,7 @@ const (
 )
 
 func (s *Server) handleFindings(w http.ResponseWriter, r *http.Request) {
-	resources, err := db.ListResources(r.Context(), s.pool)
+	resources, err := s.data.ListResources(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list resources: "+err.Error())
 		return
@@ -231,7 +320,7 @@ func (s *Server) handleTrends(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	trends, err := db.ListTrends(r.Context(), s.pool, days)
+	trends, err := s.data.ListTrends(r.Context(), days)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load trends: "+err.Error())
 		return
@@ -262,7 +351,7 @@ type summaryResponse struct {
 }
 
 func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
-	resources, err := db.ListResources(r.Context(), s.pool)
+	resources, err := s.data.ListResources(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list resources: "+err.Error())
 		return
@@ -320,11 +409,21 @@ var providerByService = map[string]string{
 }
 
 func providerFromResource(r shared.Resource) string {
-	if p, ok := providerByService[r.Service]; ok {
+	return providerForServiceAccount(r.Service, r.AccountID)
+}
+
+// providerForServiceAccount is the shared service-to-provider mapping used
+// by both the v0 summary handler and the v1 cost endpoints (which only
+// have AccountID + Service available on snapshots). The "functions" tie
+// is broken by checking the AccountID shape — Azure subscription IDs are
+// 36-char UUIDs, GCP project IDs aren't — same heuristic the summary
+// handler has used since the dashboard shipped.
+func providerForServiceAccount(service, accountID string) string {
+	if p, ok := providerByService[service]; ok {
 		return p
 	}
-	if r.Service == "functions" {
-		if len(r.AccountID) == 36 && r.AccountID[8] == '-' && r.AccountID[13] == '-' {
+	if service == "functions" {
+		if len(accountID) == 36 && accountID[8] == '-' && accountID[13] == '-' {
 			return "azure"
 		}
 		return "gcp"

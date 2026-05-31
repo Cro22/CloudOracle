@@ -91,9 +91,9 @@ func TestAzureFetchVirtualMachines_Mapping(t *testing.T) {
 	}
 }
 
-// TestAzureFetchVirtualMachines_NilHardwareProfile verifica que un VM con
-// Properties.HardwareProfile == nil no paniquea — Azure puede devolver eso
-// para VMs en estados de transicion.
+// TestAzureFetchVirtualMachines_NilHardwareProfile verifies that a VM with
+// Properties.HardwareProfile == nil does not panic — Azure can return that
+// for VMs in transitional states.
 func TestAzureFetchVirtualMachines_NilHardwareProfile(t *testing.T) {
 	name := "vm-broken"
 	location := "westus"
@@ -172,10 +172,10 @@ func TestAzureFetchManagedDisks_Mapping(t *testing.T) {
 	}
 }
 
-// TestAzureFetchFunctionApps_FiltersOutWebApps verifica el filtrado clave
-// del fetcher: el endpoint /sites devuelve Web Apps Y Function Apps mezclados,
-// y solo nos interesan los functionapp. Si alguien rompe el filtro, este test
-// se cae.
+// TestAzureFetchFunctionApps_FiltersOutWebApps verifies the fetcher's key
+// filtering: the /sites endpoint returns Web Apps AND Function Apps mixed
+// together, and we only care about functionapp. If someone breaks the
+// filter, this test fails.
 func TestAzureFetchFunctionApps_FiltersOutWebApps(t *testing.T) {
 	fnName, fnKind, fnLoc := "fn-1", "functionapp", "eastus"
 	webName, webKind, webLoc := "web-app", "app", "eastus"
@@ -201,8 +201,8 @@ func TestAzureFetchFunctionApps_FiltersOutWebApps(t *testing.T) {
 }
 
 func TestAzureFetchFunctionApps_LinuxKindMatches(t *testing.T) {
-	// Azure devuelve Kind como "functionapp,linux" para function apps en Linux.
-	// El filtro debe ser case-insensitive y un substring.
+	// Azure returns Kind as "functionapp,linux" for function apps on Linux.
+	// The filter must be case-insensitive and a substring match.
 	name, kind, loc := "fn-linux", "functionapp,linux", "eastus"
 
 	p := newTestAzureProvider()
@@ -221,8 +221,8 @@ func TestAzureFetchFunctionApps_LinuxKindMatches(t *testing.T) {
 	}
 }
 
-// TestAzureFetchResources_GracefulDegradation: si Azure SQL falla,
-// los demas servicios (VM, Disks, Functions) deben seguir surfaceando.
+// TestAzureFetchResources_GracefulDegradation: if Azure SQL fails, the
+// other services (VM, Disks, Functions) must keep surfacing.
 func TestAzureFetchResources_GracefulDegradation(t *testing.T) {
 	vmName, loc := "vm-ok", "eastus"
 	vmSize := armcompute.VirtualMachineSizeTypesStandardB2S
@@ -258,7 +258,7 @@ func TestExtractResourceGroup(t *testing.T) {
 	if got := extractResourceGroup(id); got != "my-rg" {
 		t.Errorf("got %q, want my-rg", got)
 	}
-	// case-insensitive: la API a veces devuelve "resourcegroups" minusculas
+	// case-insensitive: the API sometimes returns "resourcegroups" in lowercase
 	id2 := "/subscriptions/abc/resourcegroups/lowercased-rg/providers/Foo"
 	if got := extractResourceGroup(id2); got != "lowercased-rg" {
 		t.Errorf("case-insensitive: got %q, want lowercased-rg", got)
@@ -272,7 +272,7 @@ func TestConvertAzureTags_NilValuePointer(t *testing.T) {
 	val := "value"
 	tags := map[string]*string{
 		"key1": &val,
-		"key2": nil, // tag con valor nil — la API a veces devuelve eso
+		"key2": nil, // tag with a nil value — the API sometimes returns that
 	}
 	got := convertAzureTags(tags)
 	if got["key1"] != "value" {
