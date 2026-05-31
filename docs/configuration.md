@@ -12,6 +12,7 @@ Reference for every environment variable CloudOracle reads. All vars are loaded 
 | `SYNTHETIC_COUNT` | `100` | Default number of synthetic resources to generate |
 | `SYNTHETIC_ACCOUNT` | `synthetic-account` | Default account ID for synthetic data |
 | `CLOUD_SERVICE_TIMEOUT` | `30s` | Per-service timeout for each cloud API call (Go duration string) |
+| `CLOUDORACLE_BILLING_PROVIDER` | `snapshots` | Cost source for the v1 endpoints: `snapshots` (the projected-cost approximation) or `aws_cost_explorer` (real AWS unblended cost via the Cost Explorer API; uses `AWS_REGION`/`AWS_PROFILE`). On init failure it logs and falls back to `snapshots`. |
 | `DB_HOST`    | `localhost`   | PostgreSQL host       |
 | `DB_PORT`    | `5432`        | PostgreSQL port       |
 | `DB_USER`    | `oracle`      | Database user         |

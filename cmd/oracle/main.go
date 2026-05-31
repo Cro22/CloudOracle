@@ -3,6 +3,7 @@ package main
 import (
 	"CloudOracle/internal/analyzer"
 	"CloudOracle/internal/api"
+	"CloudOracle/internal/billing"
 	"CloudOracle/internal/cloud"
 	"CloudOracle/internal/config"
 	"CloudOracle/internal/db"
@@ -697,7 +698,21 @@ func runServe(ctx context.Context, pool *db.Pool, cfg config.Config, args []stri
 	runCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	server := api.NewServer(pool, cfg.API)
+	var serverOpts []api.ServerOption
+	if cfg.API.BillingProvider == config.BillingAWSCostExplorer {
+		src, err := billing.NewAWSCostExplorerSource(runCtx, cfg.Cloud.AWSRegion, cfg.Cloud.AWSProfile)
+		if err != nil {
+			// Don't fail startup over a billing-source problem: fall back to the
+			// snapshot approximation so the API still serves, and make the
+			// degradation loud.
+			slog.Warn("falling back to snapshot cost source: AWS Cost Explorer init failed", "error", err)
+		} else {
+			slog.Info("v1 cost endpoints using AWS Cost Explorer (real billed cost)")
+			serverOpts = append(serverOpts, api.WithBillingSource(src))
+		}
+	}
+
+	server := api.NewServer(pool, cfg.API, serverOpts...)
 	slog.Info("Dashboard available", "url", fmt.Sprintf("http://localhost:%s", *port))
 	if err := server.Run(runCtx, ":"+*port, cfg.API.ShutdownTimeout); err != nil {
 		slog.Error("API server failed", "error", err)

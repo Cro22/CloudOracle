@@ -57,6 +57,9 @@ type APIConfig struct {
 	Key             string
 	Port            string
 	ShutdownTimeout time.Duration
+	// BillingProvider selects the cost data source for the v1 endpoints:
+	// "snapshots" (default) or "aws_cost_explorer".
+	BillingProvider string
 }
 
 const (
@@ -64,13 +67,20 @@ const (
 	providerAWS       = "aws"
 	providerGCP       = "gcp"
 	providerAzure     = "azure"
+
+	// Billing providers select where the v1 cost endpoints read from:
+	// "snapshots" (the default approximation) or "aws_cost_explorer" (real
+	// AWS billed cost via the Cost Explorer API).
+	BillingSnapshots      = "snapshots"
+	BillingAWSCostExplorer = "aws_cost_explorer"
 )
 
 var (
-	validCloudProviders = []string{providerSynthetic, providerAWS, providerGCP, providerAzure}
-	validLLMProviders   = []string{"gemini", "claude", "openai"}
-	validLogLevels      = []string{"debug", "info", "warn", "error"}
-	validLogFormats     = []string{"text", "json"}
+	validCloudProviders   = []string{providerSynthetic, providerAWS, providerGCP, providerAzure}
+	validLLMProviders     = []string{"gemini", "claude", "openai"}
+	validBillingProviders = []string{BillingSnapshots, BillingAWSCostExplorer}
+	validLogLevels        = []string{"debug", "info", "warn", "error"}
+	validLogFormats       = []string{"text", "json"}
 )
 
 // ValidationError aggregates every config problem encountered during Load
@@ -130,6 +140,7 @@ func Load() (Config, error) {
 			Key:             os.Getenv("CLOUDORACLE_API_KEY"),
 			Port:            v.requirePort("CLOUDORACLE_API_PORT", "8080"),
 			ShutdownTimeout: v.requirePositiveDuration("CLOUDORACLE_API_SHUTDOWN_TIMEOUT", 10*time.Second),
+			BillingProvider: v.requireEnum("CLOUDORACLE_BILLING_PROVIDER", BillingSnapshots, validBillingProviders),
 		},
 		ServiceTimeout: v.requirePositiveDuration("CLOUD_SERVICE_TIMEOUT", 30*time.Second),
 		LogLevel:       v.requireEnum("LOG_LEVEL", "info", validLogLevels),

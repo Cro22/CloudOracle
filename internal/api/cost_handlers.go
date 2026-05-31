@@ -1,6 +1,7 @@
 package api
 
 import (
+	"CloudOracle/internal/billing"
 	"CloudOracle/internal/db"
 	"CloudOracle/internal/shared"
 	"context"
@@ -93,22 +94,26 @@ func (s *Server) handleCostSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	snapshots, err := s.data.ListSnapshotsInRange(r.Context(), start, end)
+	report, err := s.billing.Costs(r.Context(), start, end)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError,
-			"failed to load snapshots: "+err.Error(), "snapshot_query_failed")
+		writeCostSourceError(w, err)
 		return
 	}
 
-	days := periodDays(start, end)
-	perProvider := aggregateByProvider(snapshots, days, filter)
+	perProvider := make(map[string]float64)
+	for _, rec := range report.Records {
+		if len(filter) > 0 && !filter[rec.Provider] {
+			continue
+		}
+		perProvider[rec.Provider] += rec.AmountUSD
+	}
 
 	resp := costSummaryResponse{
 		Period:      periodDTO{Start: start.Format(time.DateOnly), End: end.Format(time.DateOnly)},
 		Providers:   make(map[string]providerSummaryDTO, len(perProvider)),
 		GeneratedAt: time.Now().UTC(),
-		DataSource:  dataSourceLabel,
-		Note:        dataSourceNote,
+		DataSource:  report.DataSource,
+		Note:        report.Note,
 	}
 
 	var total float64
@@ -161,15 +166,19 @@ func (s *Server) handleCostByService(w http.ResponseWriter, r *http.Request) {
 		top = 10
 	}
 
-	snapshots, err := s.data.ListSnapshotsInRange(r.Context(), start, end)
+	report, err := s.billing.Costs(r.Context(), start, end)
 	if err != nil {
-		writeAPIError(w, http.StatusInternalServerError,
-			"failed to load snapshots: "+err.Error(), "snapshot_query_failed")
+		writeCostSourceError(w, err)
 		return
 	}
 
-	days := periodDays(start, end)
-	perService := aggregateByService(snapshots, days, provider)
+	perService := make(map[string]float64)
+	for _, rec := range report.Records {
+		if rec.Provider != provider {
+			continue
+		}
+		perService[rec.Service] += rec.AmountUSD
+	}
 
 	var total float64
 	for _, v := range perService {
@@ -206,53 +215,28 @@ func (s *Server) handleCostByService(w http.ResponseWriter, r *http.Request) {
 		Services:    services,
 		TotalUSD:    roundCents(total),
 		GeneratedAt: time.Now().UTC(),
-		DataSource:  dataSourceLabel,
-		Note:        dataSourceNote,
+		DataSource:  report.DataSource,
+		Note:        report.Note,
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// aggregateByProvider implements the snapshots approximation:
-//
-//  1. Group snapshots by (account, service).
-//  2. For each group, compute the average total_monthly_cost across the
-//     snapshots that fell in the period.
-//  3. Map each (account, service) to a provider via providerForServiceAccount
-//     (the same mapping the dashboard summary uses).
-//  4. Scale the per-group monthly rate to the period length: avg × days / 30.
-//
-// The optional filter is treated as a whitelist when non-nil; an empty map
-// is also "no filter" — see parseProvidersFilter.
-func aggregateByProvider(snapshots []db.Snapshot, days int, filter map[string]bool) map[string]float64 {
-	perAS := aggregateMonthlyByAccountService(snapshots)
-	scale := float64(days) / 30.0
-	result := make(map[string]float64)
-	for k, avgMonthly := range perAS {
-		provider := providerForServiceAccount(k.service, k.account)
-		if len(filter) > 0 && !filter[provider] {
-			continue
-		}
-		result[provider] += avgMonthly * scale
+// writeCostSourceError maps a billing.Source failure to a 500 with the source's
+// machine-readable code (e.g. "snapshot_query_failed", "billing_query_failed"),
+// falling back to a generic code for any other error.
+func writeCostSourceError(w http.ResponseWriter, err error) {
+	code := "cost_query_failed"
+	var srcErr *billing.SourceError
+	if errors.As(err, &srcErr) && srcErr.Code != "" {
+		code = srcErr.Code
 	}
-	return result
+	writeAPIError(w, http.StatusInternalServerError, err.Error(), code)
 }
 
-// aggregateByService is the service-level counterpart: it returns per-service
-// period totals for the requested provider. Unlike aggregateByProvider it
-// hard-filters on the provider (the v1 endpoint requires `provider` to be
-// set to a specific value), so no whitelist map is needed.
-func aggregateByService(snapshots []db.Snapshot, days int, provider string) map[string]float64 {
-	perAS := aggregateMonthlyByAccountService(snapshots)
-	scale := float64(days) / 30.0
-	result := make(map[string]float64)
-	for k, avgMonthly := range perAS {
-		if providerForServiceAccount(k.service, k.account) != provider {
-			continue
-		}
-		result[k.service] += avgMonthly * scale
-	}
-	return result
-}
+// The per-(account, service) monthly-rate averaging and provider mapping that
+// the snapshot approximation needs now lives in snapshotSource (snapshot_source.go),
+// which implements billing.Source. aggregateMonthlyByAccountService below is the
+// shared primitive it builds on.
 
 type accountServiceKey struct {
 	account string

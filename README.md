@@ -23,7 +23,7 @@ flowchart LR
     LLM -->|"HTTP tool call"| T[CloudOracle tools<br/>cost-summary / cost-by-service / recommendations / cost-trends / inventory]
     T -->|"GET /api/v1/* + X-API-Key"| GO[CloudOracle Go<br/>oracle serve]
     GO -->|"SQL"| DB[(PostgreSQL<br/>cost_snapshots)]
-    GO -->|"data_source: snapshots_approximation / heuristic_rules"| T
+    GO -->|"data_source: snapshots_approximation / billing_aws_cost_explorer / heuristic_rules"| T
     LLM -->|"knowledge tool call"| R[finops_knowledge_search<br/>RAG]
     R -->|"similarity search"| VDB[(pgvector<br/>finops_knowledge)]
     T --> LLM
@@ -142,7 +142,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 - [X]  **Milestone 8.3** — pgvector + RAG over a curated FinOps corpus: packaged markdown knowledge base, Gemini embeddings (mirroring the LLM-provider ABC), `langchain-postgres` PGVector store (compose image → `pgvector/pgvector:pg16`), `insights-agent-ingest` CLI, and a `finops_knowledge_search` tool the agent uses for conceptual/policy questions with source citations. Optional via `DATABASE_URL`; retrieval path unit-tested offline with an in-memory store
 - [X]  **Milestone 8.4** — Hand-rolled supervisor multi-agent graph replacing `create_react_agent`: a `StateGraph` where a tool-call-routing supervisor delegates to three specialist workers (cost analyst, savings advisor, concept expert — each its own hand-rolled ReAct loop) and a synthesizer composes the answer, with a hop cap. Driveable end-to-end by the scripted fake model; `create_react_agent` kept as the simple graph
 - [X]  **Milestone 8.5** — Production guardrails: per-run cost/usage caps (`RunLimits`); layered semantic answer validation (deterministic figure-grounding against tool observations, then an optional LLM judge); deterministic no-LLM fallback on run failure or failed validation; and a FastAPI HTTP surface (`POST /ask`, `GET /health`, optional `X-API-Key`) sharing one `GeminiAgentRunner` with the CLI
-- [ ]  **Milestone 8.7** — Real billing / Cost Explorer integration replacing the snapshot approximation
+- [X]  **Milestone 8.7** — Real billing integration behind a `billing.Source` abstraction: the v1 cost endpoints now consume normalized cost records, with the snapshot approximation as the default source and an **AWS Cost Explorer** source (real unblended cost, `data_source: billing_aws_cost_explorer`) selectable via `CLOUDORACLE_BILLING_PROVIDER=aws_cost_explorer`. GCP (BigQuery export) and Azure (Cost Management) sources can plug into the same interface next
 
 ### v2 — Terraform PR cost analysis
 
