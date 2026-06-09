@@ -7,7 +7,7 @@ This document covers v1 and v2 internal layout, the design patterns behind the a
 ```
 internal/iac/                  # Terraform plan parser
   terraform.go                 # ParsePlan / ParsePlanFile + the canonical Plan model
-  aws/                         # AWS-specific resource shape decoders (after_unknown handling, attr extraction)
+  aws/                         # AWS-specific resource shape decoders (attribute extraction; unknown/null values treated as missing)
 internal/pricing/              # AWS Pricing API client + per-service estimators
   aws.go                       # *pricing.Client wrapping the AWS SDK
   cache.go                     # 7-day disk cache (best-effort) keyed by service+filters

@@ -35,7 +35,7 @@ func (c *ClaudeProvider) Name() string {
 
 type claudeRequest struct {
 	Model     string          `json:"model"`
-	MaxTokens int             `json:"maxTokens"`
+	MaxTokens int             `json:"max_tokens"`
 	Messages  []claudeMessage `json:"messages"`
 }
 

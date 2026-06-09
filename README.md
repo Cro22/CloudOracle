@@ -165,7 +165,7 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 
 ### v2 — Terraform PR cost analysis
 
-- [X]  Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op) and `after_unknown` handling
+- [X]  Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op); unknown-until-apply attributes surface as JSON `null` and are treated as missing (a missing *required* attribute routes the resource to `Skipped`)
 - [X]  AWS Pricing API client + cache — `internal/pricing.Client` wraps AWS SDK v2 `pricing:GetProducts`; `internal/pricing.Cache` adds a 7-day disk cache keyed by service+filters
 - [X]  Per-resource estimators — EC2, EBS, RDS, Aurora cluster instance, Lambda, NAT gateway with breakdown line items and assumption notes
 - [X]  CostDiff aggregator — `internal/diff.Analyze` collapses per-resource estimates into a plan-wide picture with Created / Deleted / Updated / Replaced / Skipped slices, top movers, and aggregate confidence
