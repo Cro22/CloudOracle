@@ -699,15 +699,24 @@ func runServe(ctx context.Context, pool *db.Pool, cfg config.Config, args []stri
 	defer stop()
 
 	var serverOpts []api.ServerOption
-	if cfg.API.BillingProvider == config.BillingAWSCostExplorer {
+	// Don't fail startup over a billing-source problem: fall back to the
+	// snapshot approximation so the API still serves, and make the degradation
+	// loud.
+	switch cfg.API.BillingProvider {
+	case config.BillingAWSCostExplorer:
 		src, err := billing.NewAWSCostExplorerSource(runCtx, cfg.Cloud.AWSRegion, cfg.Cloud.AWSProfile)
 		if err != nil {
-			// Don't fail startup over a billing-source problem: fall back to the
-			// snapshot approximation so the API still serves, and make the
-			// degradation loud.
 			slog.Warn("falling back to snapshot cost source: AWS Cost Explorer init failed", "error", err)
 		} else {
 			slog.Info("v1 cost endpoints using AWS Cost Explorer (real billed cost)")
+			serverOpts = append(serverOpts, api.WithBillingSource(src))
+		}
+	case config.BillingGCPBigQuery:
+		src, err := billing.NewGCPBigQuerySource(runCtx, cfg.Cloud.GCPProject, cfg.Cloud.GCPBillingDataset, cfg.Cloud.GCPBillingTable)
+		if err != nil {
+			slog.Warn("falling back to snapshot cost source: GCP BigQuery init failed", "error", err)
+		} else {
+			slog.Info("v1 cost endpoints using GCP BigQuery billing export (real billed cost)")
 			serverOpts = append(serverOpts, api.WithBillingSource(src))
 		}
 	}

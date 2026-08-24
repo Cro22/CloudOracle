@@ -105,6 +105,35 @@ go run ./cmd/oracle serve --port 8080
 
 Since this path hasn't been exercised end-to-end, expect to debug the SDK call mapping on first run.
 
+### Real billing via the BigQuery export
+
+The steps above cover *inventory* (what you have). For *real billed cost* on the
+v1 cost endpoints, point `oracle serve` at the GCP billing export in BigQuery —
+the GCP counterpart to AWS Cost Explorer.
+
+1. In the console, enable **Cloud Billing → Billing export → BigQuery export**
+   (Standard usage cost). GCP starts writing a
+   `gcp_billing_export_v1_<BILLING_ACCOUNT_ID>` table into the dataset you choose.
+   Export data is not backfilled, so cost only appears from the day you enable it.
+2. Grant the service account `roles/bigquery.dataViewer` on the dataset and
+   `roles/bigquery.jobUser` on the project (needed to run the query). ADC is the
+   same as for inventory — `GOOGLE_APPLICATION_CREDENTIALS` or `gcloud auth
+   application-default login`.
+3. Point CloudOracle at it:
+
+```bash
+export CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery
+export GOOGLE_CLOUD_PROJECT=your-project-id          # project that owns the dataset
+export CLOUDORACLE_GCP_BILLING_DATASET=billing        # dataset holding the export
+export CLOUDORACLE_GCP_BILLING_TABLE=gcp_billing_export_v1_0123AB_CDEF45_6789GH
+go run ./cmd/oracle serve --port 8080
+```
+
+The cost endpoints then report `data_source: billing_gcp_bigquery` (net cost =
+list cost plus credits, grouped by service). If the client fails to initialize,
+the server logs a warning and falls back to the `snapshots` approximation rather
+than refusing to start.
+
 ## Azure (untested against a live account)
 
 > Implemented but not verified against a real Azure subscription.

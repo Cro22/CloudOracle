@@ -15,9 +15,11 @@ func allConfigEnvVars() []string {
 		"DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_NAME",
 		"CLOUDORACLE_PROVIDER", "AWS_REGION", "AWS_PROFILE",
 		"GOOGLE_CLOUD_PROJECT", "AZURE_SUBSCRIPTION_ID",
+		"CLOUDORACLE_GCP_BILLING_DATASET", "CLOUDORACLE_GCP_BILLING_TABLE",
 		"SYNTHETIC_COUNT", "SYNTHETIC_ACCOUNT",
 		"LLM_PROVIDER", "GEMINI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LLM_TIMEOUT",
 		"CLOUDORACLE_API_KEY", "CLOUDORACLE_API_PORT", "CLOUDORACLE_API_SHUTDOWN_TIMEOUT",
+		"CLOUDORACLE_BILLING_PROVIDER",
 		"CLOUD_SERVICE_TIMEOUT", "LOG_LEVEL", "LOG_FORMAT",
 	}
 }
@@ -196,6 +198,46 @@ func TestLoad_GCPProviderWithProject_OK(t *testing.T) {
 	}
 	if cfg.Cloud.GCPProject != "my-project" {
 		t.Errorf("GCPProject = %q, want my-project", cfg.Cloud.GCPProject)
+	}
+}
+
+// TestLoad_GCPBigQueryBillingRequiresCoordinates covers the cross-field rule:
+// CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery needs project + dataset + table.
+func TestLoad_GCPBigQueryBillingRequiresCoordinates(t *testing.T) {
+	clearAll(t)
+	t.Setenv("CLOUDORACLE_BILLING_PROVIDER", "gcp_bigquery")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error when billing=gcp_bigquery without coordinates")
+	}
+	for _, want := range []string{
+		"GOOGLE_CLOUD_PROJECT",
+		"CLOUDORACLE_GCP_BILLING_DATASET",
+		"CLOUDORACLE_GCP_BILLING_TABLE",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %s: %v", want, err)
+		}
+	}
+}
+
+func TestLoad_GCPBigQueryBillingWithCoordinates_OK(t *testing.T) {
+	clearAll(t)
+	t.Setenv("CLOUDORACLE_BILLING_PROVIDER", "gcp_bigquery")
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "my-project")
+	t.Setenv("CLOUDORACLE_GCP_BILLING_DATASET", "billing")
+	t.Setenv("CLOUDORACLE_GCP_BILLING_TABLE", "gcp_billing_export_v1_ABC123")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.API.BillingProvider != BillingGCPBigQuery {
+		t.Errorf("BillingProvider = %q, want %q", cfg.API.BillingProvider, BillingGCPBigQuery)
+	}
+	if cfg.Cloud.GCPBillingDataset != "billing" || cfg.Cloud.GCPBillingTable != "gcp_billing_export_v1_ABC123" {
+		t.Errorf("billing coordinates not loaded: %+v", cfg.Cloud)
 	}
 }
 

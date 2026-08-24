@@ -28,13 +28,17 @@ type DBConfig struct {
 }
 
 type CloudConfig struct {
-	Provider       string
-	AWSRegion      string
-	AWSProfile     string
-	GCPProject     string
-	AzureSubID     string
-	SyntheticCount int
-	SyntheticAcct  string
+	Provider   string
+	AWSRegion  string
+	AWSProfile string
+	GCPProject string
+	// GCP billing export (BigQuery) coordinates, only used when
+	// CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery.
+	GCPBillingDataset string
+	GCPBillingTable   string
+	AzureSubID        string
+	SyntheticCount    int
+	SyntheticAcct     string
 }
 
 type LLMConfig struct {
@@ -58,7 +62,7 @@ type APIConfig struct {
 	Port            string
 	ShutdownTimeout time.Duration
 	// BillingProvider selects the cost data source for the v1 endpoints:
-	// "snapshots" (default) or "aws_cost_explorer".
+	// "snapshots" (default), "aws_cost_explorer", or "gcp_bigquery".
 	BillingProvider string
 }
 
@@ -69,16 +73,18 @@ const (
 	providerAzure     = "azure"
 
 	// Billing providers select where the v1 cost endpoints read from:
-	// "snapshots" (the default approximation) or "aws_cost_explorer" (real
-	// AWS billed cost via the Cost Explorer API).
-	BillingSnapshots      = "snapshots"
+	// "snapshots" (the default approximation), "aws_cost_explorer" (real AWS
+	// billed cost via the Cost Explorer API), or "gcp_bigquery" (real GCP
+	// billed cost from the billing export in BigQuery).
+	BillingSnapshots       = "snapshots"
 	BillingAWSCostExplorer = "aws_cost_explorer"
+	BillingGCPBigQuery     = "gcp_bigquery"
 )
 
 var (
 	validCloudProviders   = []string{providerSynthetic, providerAWS, providerGCP, providerAzure}
 	validLLMProviders     = []string{"gemini", "claude", "openai"}
-	validBillingProviders = []string{BillingSnapshots, BillingAWSCostExplorer}
+	validBillingProviders = []string{BillingSnapshots, BillingAWSCostExplorer, BillingGCPBigQuery}
 	validLogLevels        = []string{"debug", "info", "warn", "error"}
 	validLogFormats       = []string{"text", "json"}
 )
@@ -118,13 +124,15 @@ func Load() (Config, error) {
 			Database: getEnv("DB_NAME", "cloudoracle"),
 		},
 		Cloud: CloudConfig{
-			Provider:       v.requireEnum("CLOUDORACLE_PROVIDER", providerSynthetic, validCloudProviders),
-			AWSRegion:      getEnv("AWS_REGION", "us-east-2"),
-			AWSProfile:     getEnv("AWS_PROFILE", "cloudoracle"),
-			GCPProject:     os.Getenv("GOOGLE_CLOUD_PROJECT"),
-			AzureSubID:     os.Getenv("AZURE_SUBSCRIPTION_ID"),
-			SyntheticCount: v.requirePositiveInt("SYNTHETIC_COUNT", 100),
-			SyntheticAcct:  getEnv("SYNTHETIC_ACCOUNT", "synthetic-account"),
+			Provider:          v.requireEnum("CLOUDORACLE_PROVIDER", providerSynthetic, validCloudProviders),
+			AWSRegion:         getEnv("AWS_REGION", "us-east-2"),
+			AWSProfile:        getEnv("AWS_PROFILE", "cloudoracle"),
+			GCPProject:        os.Getenv("GOOGLE_CLOUD_PROJECT"),
+			GCPBillingDataset: os.Getenv("CLOUDORACLE_GCP_BILLING_DATASET"),
+			GCPBillingTable:   os.Getenv("CLOUDORACLE_GCP_BILLING_TABLE"),
+			AzureSubID:        os.Getenv("AZURE_SUBSCRIPTION_ID"),
+			SyntheticCount:    v.requirePositiveInt("SYNTHETIC_COUNT", 100),
+			SyntheticAcct:     getEnv("SYNTHETIC_ACCOUNT", "synthetic-account"),
 		},
 		LLM: LLMConfig{
 			Provider:       v.optionalEnum("LLM_PROVIDER", validLLMProviders),
@@ -303,6 +311,18 @@ func (v *validator) crossFieldChecks(cfg *Config) {
 	case "openai":
 		if cfg.LLM.OpenAIAPIKey == "" {
 			v.errorf("OPENAI_API_KEY is required when LLM_PROVIDER=openai")
+		}
+	}
+
+	if cfg.API.BillingProvider == BillingGCPBigQuery {
+		if cfg.Cloud.GCPProject == "" {
+			v.errorf("GOOGLE_CLOUD_PROJECT is required when CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery")
+		}
+		if cfg.Cloud.GCPBillingDataset == "" {
+			v.errorf("CLOUDORACLE_GCP_BILLING_DATASET is required when CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery")
+		}
+		if cfg.Cloud.GCPBillingTable == "" {
+			v.errorf("CLOUDORACLE_GCP_BILLING_TABLE is required when CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery")
 		}
 	}
 }
