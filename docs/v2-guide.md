@@ -63,7 +63,7 @@ Two reference workflows live under [`.github/examples/`](../.github/examples) �
 | Input | Required | Default | Notes |
 |-------|----------|---------|-------|
 | `plan-file` | yes | — | Path to `terraform show -json` output. |
-| `region` | no | `us-east-2` | AWS region the Pricing API queries against. |
+| `region` | no | `us-east-2` | Region for pricing lookups — an AWS region (`us-east-2`) for AWS plans or a GCP region (`us-central1`) for GCP plans. |
 | `output-file` | no | `` | Also write the rendered Markdown to a file (useful for artefact upload). |
 | `marker` | no | `cloudoracle-pr-v1` | HTML-comment substring used for upsert. Bump if you change the comment template. |
 | `no-llm` | no | `false` | Force the deterministic templated narrative even with LLM keys configured. |
@@ -97,7 +97,7 @@ Full flag listing:
 | Flag | Default | Notes |
 |------|---------|-------|
 | `--plan-file` | — | Required. Path to JSON plan. |
-| `--region` | `us-east-2` | AWS region for pricing. |
+| `--region` | `us-east-2` | Region for pricing — an AWS region for AWS plans, or a GCP region (e.g. `us-central1`) for GCP plans. |
 | `--output` | _(stdout)_ | File to also write the Markdown to; `-` or empty means stdout. |
 | `--no-llm` | `false` | Force templated narrative. |
 | `--post` | `false` | Post / upsert the comment via the GitHub API. Requires `--repo` and `--pr`. |
@@ -124,7 +124,17 @@ The v2 prompt (in `internal/diff/narrative.go`) is purpose-built for PR review t
 
 ## Supported resources
 
-EC2 instances (Linux on-demand compute + root EBS), EBS volumes (gp2/gp3/io1/io2/st1/sc1), RDS instances (single-AZ + Aurora cluster instances), Lambda functions (cold-start estimate), NAT gateways (hourly only). Unsupported types appear in the rendered comment under "Skipped" with a one-line reason — they don't fail the run. Adding a new resource type is one new file under `internal/pricing/` plus a switch case in `estimator.go`.
+**AWS** (priced live against the AWS Pricing API): EC2 instances (Linux on-demand compute + root EBS), EBS volumes (gp2/gp3/io1/io2/st1/sc1), RDS instances (single-AZ + Aurora cluster instances), Lambda functions (cold-start estimate), NAT gateways (hourly only).
+
+**GCP** (priced from an embedded static table — see below): `google_compute_instance` (machine type + boot disk; Spot/preemptible priced at on-demand as a labeled upper bound), `google_compute_disk` (persistent disk), `google_sql_database_instance` (Cloud SQL PostgreSQL/MySQL — custom/shared/legacy tiers, storage, REGIONAL HA doubling; SQL Server is skipped because its licensing isn't modeled).
+
+Unsupported types appear in the rendered comment under "Skipped" with a one-line reason — they don't fail the run. Adding a new AWS resource type is one new file under `internal/pricing/` plus a switch case in `change.go`; GCP types add an extractor under `internal/iac/gcp/` and an estimator that reads `internal/pricing/gcp_prices.json`.
+
+### How GCP is priced
+
+AWS resources price against the live AWS Pricing API, which is cleanly queryable by product attributes. GCP has no comparable API — the Cloud Billing Catalog exposes SKUs whose machine-type mapping lives in free-text descriptions, brittle to match and requiring a live API call in CI. Since a pr-check estimate is explicitly approximate (with per-resource confidence levels), **GCP is priced from a curated static table** (`internal/pricing/gcp_prices.json`, embedded at build time): us-central1 base rates + per-region multipliers for Compute Engine, plus persistent-disk and Cloud SQL rates. This is deterministic and needs no credentials, but it **drifts from the current list price** over time — GCP estimates are capped at `medium` confidence and carry a "static price table" caveat. Refresh the table from [Compute Engine pricing](https://cloud.google.com/compute/all-pricing) and [Cloud SQL pricing](https://cloud.google.com/sql/pricing) when it goes stale.
+
+For GCP plans, pass the GCP region to `--region` (e.g. `--region=us-central1`); a per-resource zone in the plan (`us-central1-a` → `us-central1`) overrides it. A single pr-check run assumes one provider/region — mixed AWS+GCP plans price each type against its own path but share the one `--region` value.
 
 ---
 
