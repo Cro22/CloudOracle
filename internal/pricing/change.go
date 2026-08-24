@@ -205,6 +205,12 @@ func estimateGCPState(resourceType string, attrs map[string]interface{}, region 
 			return Estimate{}, err.Error(), nil
 		}
 		return est, "", err
+	case ra.ComputeDisk != nil:
+		est, err := EstimateGCPComputeDisk(ra.ComputeDisk)
+		if errors.Is(err, errUnpricedGCPDisk) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
 	}
 	return Estimate{}, "unsupported resource type: " + resourceType, nil
 }
