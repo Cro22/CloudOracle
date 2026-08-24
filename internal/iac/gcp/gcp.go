@@ -17,6 +17,7 @@ type ResourceAttributes struct {
 	Type            string
 	ComputeInstance *ComputeInstanceAttributes
 	ComputeDisk     *ComputeDiskAttributes
+	SQLInstance     *SQLInstanceAttributes
 }
 
 // Extract dispatches to the type-specific extractor for resourceType.
@@ -39,6 +40,12 @@ func Extract(resourceType string, attrs map[string]interface{}) (*ResourceAttrib
 			return nil, err
 		}
 		return &ResourceAttributes{Type: resourceType, ComputeDisk: cd}, nil
+	case "google_sql_database_instance":
+		si, err := ExtractSQLInstance(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, SQLInstance: si}, nil
 	default:
 		return nil, nil
 	}
@@ -47,5 +54,9 @@ func Extract(resourceType string, attrs map[string]interface{}) (*ResourceAttrib
 // SupportedTypes returns the GCP resource types this package can extract, for
 // docs and the pr-check "unsupported" diagnostics.
 func SupportedTypes() []string {
-	return []string{"google_compute_instance", "google_compute_disk"}
+	return []string{
+		"google_compute_instance",
+		"google_compute_disk",
+		"google_sql_database_instance",
+	}
 }

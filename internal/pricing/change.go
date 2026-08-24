@@ -211,6 +211,12 @@ func estimateGCPState(resourceType string, attrs map[string]interface{}, region 
 			return Estimate{}, err.Error(), nil
 		}
 		return est, "", err
+	case ra.SQLInstance != nil:
+		est, err := EstimateGCPSQLInstance(ra.SQLInstance)
+		if errors.Is(err, errUnpricedGCPSQLTier) || errors.Is(err, errSQLServerNotModeled) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
 	}
 	return Estimate{}, "unsupported resource type: " + resourceType, nil
 }
