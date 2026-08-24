@@ -21,6 +21,14 @@ type gcpPriceTable struct {
 	ComputeHourlyUSD map[string]float64 `json:"compute_hourly_usd"`
 	RegionMultiplier map[string]float64 `json:"region_multiplier"`
 	PDGBMonthUSD     map[string]float64 `json:"pd_gb_month_usd"`
+	CloudSQL         gcpCloudSQLPrices  `json:"cloudsql"`
+}
+
+type gcpCloudSQLPrices struct {
+	VCPUHourlyUSD       float64            `json:"vcpu_hourly_usd"`
+	RAMGBHourlyUSD      float64            `json:"ram_gb_hourly_usd"`
+	SharedCoreHourlyUSD map[string]float64 `json:"shared_core_hourly_usd"`
+	StorageGBMonthUSD   map[string]float64 `json:"storage_gb_month_usd"`
 }
 
 // gcpPrices is parsed once at package init. A malformed embedded table is a
