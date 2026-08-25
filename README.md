@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-469%20unit%20%2B%2021%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
+![Tests](https://img.shields.io/badge/tests-581%20unit%20%2B%2022%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
 **One FinOps toolkit, three surfaces over the same cost data** — audit what you spend, predict what a PR will cost, and ask about both in plain language.
 
@@ -131,8 +131,8 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 | Language    | Go 1.25                                      |
 | Database    | PostgreSQL 16 (Alpine)                       |
 | DB Driver   | pgx v5 (connection pool)                     |
-| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS)        |
-| GCP SDK     | Google Cloud Go (Compute, SQL, Functions)    |
+| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS, Pricing, Cost Explorer) |
+| GCP SDK     | Google Cloud Go (Compute, SQL, Functions, BigQuery) |
 | Azure SDK   | Azure SDK for Go (Compute, SQL, App Service) |
 | Concurrency | `golang.org/x/sync/errgroup`                 |
 | Logging     | `log/slog` (structured, text/JSON)           |
