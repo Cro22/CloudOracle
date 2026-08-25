@@ -1,0 +1,83 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.7.4",
+  "resource_changes": [
+    {
+      "address": "google_compute_instance.web",
+      "mode": "managed",
+      "type": "google_compute_instance",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "machine_type": "n2-standard-4",
+          "zone": "us-central1-a",
+          "boot_disk": [
+            {"initialize_params": [{"size": 100, "type": "pd-ssd"}]}
+          ]
+        }
+      }
+    },
+    {
+      "address": "google_compute_instance.batch",
+      "mode": "managed",
+      "type": "google_compute_instance",
+      "name": "batch",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "machine_type": "e2-standard-8",
+          "zone": "europe-west2-b",
+          "scheduling": [{"provisioning_model": "SPOT"}],
+          "boot_disk": [{"initialize_params": [{"size": 50}]}]
+        }
+      }
+    },
+    {
+      "address": "google_compute_disk.data",
+      "mode": "managed",
+      "type": "google_compute_disk",
+      "name": "data",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"type": "pd-balanced", "size": 200}
+      }
+    },
+    {
+      "address": "google_sql_database_instance.main",
+      "mode": "managed",
+      "type": "google_sql_database_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "database_version": "POSTGRES_15",
+          "region": "us-central1",
+          "settings": [
+            {"tier": "db-custom-2-8192", "disk_size": 50, "disk_type": "PD_SSD", "availability_type": "REGIONAL"}
+          ]
+        }
+      }
+    },
+    {
+      "address": "google_storage_bucket.assets",
+      "mode": "managed",
+      "type": "google_storage_bucket",
+      "name": "assets",
+      "provider_name": "registry.terraform.io/hashicorp/google",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {"name": "assets", "location": "US"}
+      }
+    }
+  ]
+}

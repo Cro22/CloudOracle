@@ -2,10 +2,13 @@ package pricing
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"CloudOracle/internal/iac"
 	"CloudOracle/internal/iac/aws"
+	"CloudOracle/internal/iac/gcp"
 )
 
 // EstimateChange returns the cost impact of a single resource change in
@@ -145,6 +148,11 @@ func estimateState(ctx context.Context, src productGetter, resourceType string, 
 	if len(attrs) == 0 {
 		return Estimate{}, "no attributes for state", nil
 	}
+	// GCP resources price from the embedded static table and never touch the
+	// AWS Pricing API src, so they dispatch through their own path.
+	if strings.HasPrefix(resourceType, "google_") {
+		return estimateGCPState(resourceType, attrs, region)
+	}
 	ra, err := aws.Extract(resourceType, attrs)
 	if err != nil {
 		return Estimate{}, "", fmt.Errorf("extracting %s: %w", resourceType, err)
@@ -175,6 +183,41 @@ func estimateState(ctx context.Context, src productGetter, resourceType string, 
 	// aws.Extract returned a non-nil ResourceAttributes with no inner
 	// pointer set. Defensively treat as unsupported rather than panic —
 	// this would only happen if SupportedTypes() and Extract drift apart.
+	return Estimate{}, "unsupported resource type: " + resourceType, nil
+}
+
+// estimateGCPState is the GCP arm of estimateState: extract typed attributes,
+// dispatch to the static-table estimator. An unpriced machine type becomes a
+// Skipped result (non-empty skipReason) rather than an error, mirroring how the
+// AWS path treats unsupported types.
+func estimateGCPState(resourceType string, attrs map[string]interface{}, region string) (Estimate, string, error) {
+	ra, err := gcp.Extract(resourceType, attrs)
+	if err != nil {
+		return Estimate{}, "", fmt.Errorf("extracting %s: %w", resourceType, err)
+	}
+	if ra == nil {
+		return Estimate{}, "unsupported resource type: " + resourceType, nil
+	}
+	switch {
+	case ra.ComputeInstance != nil:
+		est, err := EstimateGCPComputeInstance(ra.ComputeInstance, region)
+		if errors.Is(err, errUnpricedGCPMachineType) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
+	case ra.ComputeDisk != nil:
+		est, err := EstimateGCPComputeDisk(ra.ComputeDisk)
+		if errors.Is(err, errUnpricedGCPDisk) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
+	case ra.SQLInstance != nil:
+		est, err := EstimateGCPSQLInstance(ra.SQLInstance)
+		if errors.Is(err, errUnpricedGCPSQLTier) || errors.Is(err, errSQLServerNotModeled) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
+	}
 	return Estimate{}, "unsupported resource type: " + resourceType, nil
 }
 

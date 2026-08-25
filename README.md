@@ -1,6 +1,6 @@
 # CloudOracle
 
-![Tests](https://img.shields.io/badge/tests-469%20unit%20%2B%2021%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
+![Tests](https://img.shields.io/badge/tests-581%20unit%20%2B%2022%20integration-brightgreen)![Go Version](https://img.shields.io/badge/go-1.25-blue) ![License](https://img.shields.io/badge/license-Apache%20License%202.0-green)
 
 **One FinOps toolkit, three surfaces over the same cost data** — audit what you spend, predict what a PR will cost, and ask about both in plain language.
 
@@ -23,7 +23,7 @@ flowchart LR
 A Go FinOps toolkit spanning three modes — two from the same `oracle` binary, plus a polyglot Python agent extension:
 
 - **v1 — Audit existing cloud spend.** Ingest live EC2/RDS/EBS/Lambda inventory from AWS, GCP, or Azure into Postgres, run deterministic rules over it, and produce an executive PDF + dashboard with an LLM-narrated summary. See **[docs/v1-guide.md](docs/v1-guide.md)**.
-- **v2 — Predict cost impact of a Terraform PR before merge.** Read `terraform show -json plan.tfplan`, look every changing resource up against the AWS Pricing API, and post (or upsert) a Markdown comment on the PR with the net monthly delta, top movers, and a 1–3 sentence LLM narrative. Ships as a GitHub Action and as the `oracle pr-check` subcommand. See **[docs/v2-guide.md](docs/v2-guide.md)**.
+- **v2 — Predict cost impact of a Terraform PR before merge.** Read `terraform show -json plan.tfplan`, price every changing resource (AWS via the live Pricing API; GCP via an embedded static price table), and post (or upsert) a Markdown comment on the PR with the net monthly delta, top movers, and a 1–3 sentence LLM narrative. Ships as a GitHub Action and as the `oracle pr-check` subcommand. See **[docs/v2-guide.md](docs/v2-guide.md)**.
 - **v3 — Insights Agent.** Polyglot Go + Python extension adding agentic FinOps analysis on top of v1/v2 cost data — a hand-rolled LangGraph supervisor over specialist agents, RAG over a FinOps corpus (pgvector), production guardrails, real billing via AWS Cost Explorer, and a CLI + HTTP surface. See **[v3 — Insights Agent](#v3--insights-agent)** below, **[docs/v3-guide.md](docs/v3-guide.md)**, and **[insights-agent/README.md](insights-agent/README.md)**.
 
 ## v3 — Insights Agent
@@ -104,7 +104,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init && terraform plan -out=tf.plan
       - run: terraform show -json tf.plan > tf-plan.json
-      - uses: Cro22/CloudOracle@v2.0.0
+      - uses: Cro22/CloudOracle@v2
         with:
           plan-file: tf-plan.json
         env:
@@ -131,8 +131,8 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 | Language    | Go 1.25                                      |
 | Database    | PostgreSQL 16 (Alpine)                       |
 | DB Driver   | pgx v5 (connection pool)                     |
-| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS)        |
-| GCP SDK     | Google Cloud Go (Compute, SQL, Functions)    |
+| AWS SDK     | aws-sdk-go-v2 (EC2, RDS, Lambda, STS, Pricing, Cost Explorer) |
+| GCP SDK     | Google Cloud Go (Compute, SQL, Functions, BigQuery) |
 | Azure SDK   | Azure SDK for Go (Compute, SQL, App Service) |
 | Concurrency | `golang.org/x/sync/errgroup`                 |
 | Logging     | `log/slog` (structured, text/JSON)           |
@@ -161,13 +161,14 @@ The synthetic provider needs no credentials. To run against AWS / GCP / Azure, s
 - [X]  **Milestone 8.3** — pgvector + RAG over a curated FinOps corpus: packaged markdown knowledge base, Gemini embeddings (mirroring the LLM-provider ABC), `langchain-postgres` PGVector store (compose image → `pgvector/pgvector:pg16`), `insights-agent-ingest` CLI, and a `finops_knowledge_search` tool the agent uses for conceptual/policy questions with source citations. Optional via `DATABASE_URL`; retrieval path unit-tested offline with an in-memory store
 - [X]  **Milestone 8.4** — Hand-rolled supervisor multi-agent graph replacing `create_react_agent`: a `StateGraph` where a tool-call-routing supervisor delegates to three specialist workers (cost analyst, savings advisor, concept expert — each its own hand-rolled ReAct loop) and a synthesizer composes the answer, with a hop cap. Driveable end-to-end by the scripted fake model; `create_react_agent` kept as the simple graph
 - [X]  **Milestone 8.5** — Production guardrails: per-run cost/usage caps (`RunLimits`); layered semantic answer validation (deterministic figure-grounding against tool observations, then an optional LLM judge); deterministic no-LLM fallback on run failure or failed validation; and a FastAPI HTTP surface (`POST /ask`, `GET /health`, optional `X-API-Key`) sharing one `GeminiAgentRunner` with the CLI
-- [X]  **Milestone 8.7** — Real billing integration behind a `billing.Source` abstraction: the v1 cost endpoints now consume normalized cost records, with the snapshot approximation as the default source and an **AWS Cost Explorer** source (real unblended cost, `data_source: billing_aws_cost_explorer`) selectable via `CLOUDORACLE_BILLING_PROVIDER=aws_cost_explorer`. GCP (BigQuery export) and Azure (Cost Management) sources can plug into the same interface next
+- [X]  **Milestone 8.7** — Real billing integration behind a `billing.Source` abstraction: the v1 cost endpoints now consume normalized cost records, with the snapshot approximation as the default source and an **AWS Cost Explorer** source (real unblended cost, `data_source: billing_aws_cost_explorer`) selectable via `CLOUDORACLE_BILLING_PROVIDER=aws_cost_explorer`, plus a **GCP BigQuery billing-export** source (real net cost, `data_source: billing_gcp_bigquery`) selectable via `CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery`. Azure (Cost Management) can plug into the same interface next
 
 ### v2 — Terraform PR cost analysis
 
 - [X]  Terraform plan parser — `internal/iac` reads `terraform show -json` into a typed `Plan` model with action classification (create / update / replace / delete / no-op); unknown-until-apply attributes surface as JSON `null` and are treated as missing (a missing *required* attribute routes the resource to `Skipped`)
 - [X]  AWS Pricing API client + cache — `internal/pricing.Client` wraps AWS SDK v2 `pricing:GetProducts`; `internal/pricing.Cache` adds a 7-day disk cache keyed by service+filters
-- [X]  Per-resource estimators — EC2, EBS, RDS, Aurora cluster instance, Lambda, NAT gateway with breakdown line items and assumption notes
+- [X]  Per-resource estimators (AWS) — EC2, EBS, RDS, Aurora cluster instance, Lambda, NAT gateway with breakdown line items and assumption notes
+- [X]  **GCP pricing** — `google_compute_instance` (+ boot disk, Spot upper-bound), `google_compute_disk`, and `google_sql_database_instance` (Cloud SQL Postgres/MySQL: custom/shared/legacy tiers, storage, REGIONAL HA), priced from an embedded static table (`internal/pricing/gcp_prices.json`, us-central1 base + region multipliers) rather than a live API — deterministic, credential-free, capped at `medium` confidence with a drift caveat. `google_*` types dispatch through `internal/iac/gcp` + the estimators in `internal/pricing/gcp_*.go`
 - [X]  CostDiff aggregator — `internal/diff.Analyze` collapses per-resource estimates into a plan-wide picture with Created / Deleted / Updated / Replaced / Skipped slices, top movers, and aggregate confidence
 - [X]  Markdown renderer — `internal/diff.RenderMarkdown` produces the canonical PR comment (header / top movers table / full breakdown / caveats / marker footer), templated and golden-tested
 - [X]  LLM-narrated PR comment — `RenderMarkdownWithLLM` swaps the templated narrative for a 1–3 sentence LLM output with caveat grouping, sanity checks (length cap, preamble strip, paragraph-break warn), and silent fallback to the templated text on any failure

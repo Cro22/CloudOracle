@@ -29,8 +29,20 @@ Used by cost-summary, cost-by-service, and cost-trends.
   compute cloud - compute"), not CloudOracle's short names (ec2), and the
   numbers can still lag the final invoice slightly as AWS finalizes charges.
 - **How to phrase it.** State the figures as real billed cost; the snapshot
-  caveat does **not** apply. Only AWS has a real billing source today; GCP and
-  Azure still report `snapshots_approximation`.
+  caveat does **not** apply. Azure still reports `snapshots_approximation`.
+
+## `billing_gcp_bigquery` — real GCP billed cost
+
+- **What it is.** Real **net** cost (list cost plus credits, Google's "total
+  cost") from the GCP billing export in BigQuery, grouped by service, for the
+  requested period. Returned when the deployment sets
+  `CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery`.
+- **What it is NOT.** Not an approximation — these are actual billed figures.
+  Service names follow GCP's billing taxonomy (e.g. "compute engine"), not
+  CloudOracle's short names, and the export only covers dates since it was
+  enabled (GCP does not backfill).
+- **How to phrase it.** State the figures as real billed cost; the snapshot
+  caveat does **not** apply.
 
 ## `heuristic_rules` — the recommendations endpoint
 
