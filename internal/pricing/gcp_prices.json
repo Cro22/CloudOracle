@@ -92,5 +92,18 @@
     "pd-balanced": 0.100,
     "pd-ssd": 0.170,
     "pd-extreme": 0.125
+  },
+  "cloudsql": {
+    "_comment": "Approximate US Cloud SQL list rates for PostgreSQL/MySQL. Custom tiers priced per vCPU-hour + per GB-RAM-hour; shared-core tiers are flat hourly. REGIONAL (HA) availability doubles compute and storage. SQL Server (licensing) is not modeled.",
+    "vcpu_hourly_usd": 0.0413,
+    "ram_gb_hourly_usd": 0.0070,
+    "shared_core_hourly_usd": {
+      "db-f1-micro": 0.0150,
+      "db-g1-small": 0.0500
+    },
+    "storage_gb_month_usd": {
+      "PD_SSD": 0.170,
+      "PD_HDD": 0.090
+    }
   }
 }
