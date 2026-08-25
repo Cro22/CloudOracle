@@ -104,7 +104,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
       - run: terraform init && terraform plan -out=tf.plan
       - run: terraform show -json tf.plan > tf-plan.json
-      - uses: Cro22/CloudOracle@v2.0.0
+      - uses: Cro22/CloudOracle@v2
         with:
           plan-file: tf-plan.json
         env:
