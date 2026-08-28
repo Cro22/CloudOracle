@@ -105,5 +105,9 @@
       "PD_SSD": 0.170,
       "PD_HDD": 0.090
     }
+  },
+  "cloud_nat": {
+    "_comment": "Cloud NAT. Only the external-IP hourly fee is estimable from a plan. Per-VM uptime ($0.0014/VM-hr, capped at $0.044/hr at 32 VMs) and data processing ($0.045/GiB) depend on runtime VM count and traffic, which a plan doesn't carry. See https://cloud.google.com/nat/pricing.",
+    "ip_hourly_usd": 0.005
   }
 }

@@ -18,6 +18,8 @@ type ResourceAttributes struct {
 	ComputeInstance *ComputeInstanceAttributes
 	ComputeDisk     *ComputeDiskAttributes
 	SQLInstance     *SQLInstanceAttributes
+	RouterNAT       *RouterNATAttributes
+	CloudFunction   *CloudFunctionAttributes
 }
 
 // Extract dispatches to the type-specific extractor for resourceType.
@@ -46,6 +48,18 @@ func Extract(resourceType string, attrs map[string]interface{}) (*ResourceAttrib
 			return nil, err
 		}
 		return &ResourceAttributes{Type: resourceType, SQLInstance: si}, nil
+	case "google_compute_router_nat":
+		nat, err := ExtractRouterNAT(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, RouterNAT: nat}, nil
+	case "google_cloudfunctions_function", "google_cloudfunctions2_function":
+		cf, err := ExtractCloudFunction(attrs)
+		if err != nil {
+			return nil, err
+		}
+		return &ResourceAttributes{Type: resourceType, CloudFunction: cf}, nil
 	default:
 		return nil, nil
 	}
@@ -58,5 +72,8 @@ func SupportedTypes() []string {
 		"google_compute_instance",
 		"google_compute_disk",
 		"google_sql_database_instance",
+		"google_compute_router_nat",
+		"google_cloudfunctions_function",
+		"google_cloudfunctions2_function",
 	}
 }

@@ -217,6 +217,12 @@ func estimateGCPState(resourceType string, attrs map[string]interface{}, region 
 			return Estimate{}, err.Error(), nil
 		}
 		return est, "", err
+	case ra.RouterNAT != nil:
+		est, err := EstimateGCPRouterNAT(ra.RouterNAT)
+		return est, "", err
+	case ra.CloudFunction != nil:
+		est, err := EstimateGCPCloudFunction(ra.CloudFunction)
+		return est, "", err
 	}
 	return Estimate{}, "unsupported resource type: " + resourceType, nil
 }

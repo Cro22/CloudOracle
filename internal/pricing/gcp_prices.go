@@ -22,6 +22,11 @@ type gcpPriceTable struct {
 	RegionMultiplier map[string]float64 `json:"region_multiplier"`
 	PDGBMonthUSD     map[string]float64 `json:"pd_gb_month_usd"`
 	CloudSQL         gcpCloudSQLPrices  `json:"cloudsql"`
+	CloudNAT         gcpCloudNATPrices  `json:"cloud_nat"`
+}
+
+type gcpCloudNATPrices struct {
+	IPHourlyUSD float64 `json:"ip_hourly_usd"`
 }
 
 type gcpCloudSQLPrices struct {

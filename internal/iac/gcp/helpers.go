@@ -106,6 +106,32 @@ func regionFromZone(zone string) string {
 	return zone[:i]
 }
 
+// getStringList returns (values, present, error) for a list-of-strings attribute.
+// Absent/null/empty-list read as (nil, false, nil) so the caller applies its own
+// default. Mirrors the aws helper of the same name.
+func getStringList(attrs map[string]interface{}, key string) ([]string, bool, error) {
+	raw, ok := attrs[key]
+	if !ok || raw == nil {
+		return nil, false, nil
+	}
+	list, ok := raw.([]interface{})
+	if !ok {
+		return nil, false, fmt.Errorf("attribute %q: want list, got %T", key, raw)
+	}
+	if len(list) == 0 {
+		return nil, false, nil
+	}
+	out := make([]string, len(list))
+	for i, v := range list {
+		s, ok := v.(string)
+		if !ok {
+			return nil, false, fmt.Errorf("attribute %q[%d]: want string, got %T", key, i, v)
+		}
+		out[i] = s
+	}
+	return out, true, nil
+}
+
 func errEmptyAttrs(typ string) error {
 	return fmt.Errorf("%s: empty attributes", typ)
 }
