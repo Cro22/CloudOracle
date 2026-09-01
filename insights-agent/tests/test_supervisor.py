@@ -224,6 +224,52 @@ async def test_tool_call_budget_forces_synthesis(
     await client.aclose()
 
 
+async def test_multiturn_thread_keeps_context_and_resets_caps(
+    client: CloudOracleClient, httpx_mock: HTTPXMock
+) -> None:
+    # Two turns on one thread with a checkpointer. Turn 1 makes a tool call;
+    # with max_tool_calls=1 the whole thread's budget is spent by turn 1's end.
+    # If per-turn accounting didn't reset, turn 2's decide() would see the
+    # carried-over tool_calls and synthesize immediately without dispatching a
+    # worker. This asserts turn 2 still runs its worker (caps reset) AND that
+    # the supervisor sees turn 1's question in history (context threads).
+    from langgraph.checkpoint.memory import MemorySaver
+
+    httpx_mock.add_response(json=SUMMARY_PAYLOAD)
+    httpx_mock.add_response(json=SUMMARY_PAYLOAD)
+    model = ScriptedChatModel(
+        script=[
+            # turn 1
+            _route(COST_ANALYST),
+            _call("cloudoracle_cost_summary", {"start": "2026-04-01", "end": "2026-04-30"}),
+            _say("AWS ~$150 in April."),
+            _route(FINISH),
+            _say("You spent ~$150 on AWS in April."),
+            # turn 2 — a follow-up; must still be able to dispatch + call a tool
+            _route(COST_ANALYST),
+            _call("cloudoracle_cost_summary", {"start": "2026-03-01", "end": "2026-03-31"}),
+            _say("AWS ~$150 in March too."),
+            _route(FINISH),
+            _say("March was also ~$150."),
+        ]
+    )
+    graph = build_supervisor_graph(
+        model, build_tools(client), RunLimits(max_tool_calls=1), checkpointer=MemorySaver()
+    )
+
+    r1 = await ask_supervisor(graph, "AWS spend in April?", thread_id="t1")
+    assert len(r1.tool_calls) == 1
+
+    r2 = await ask_supervisor(graph, "and the month before?", thread_id="t1")
+    # Per-turn cap reset: turn 2 dispatched its worker and made its own call.
+    assert len(r2.tool_calls) == 1
+    assert r2.tool_calls[0]["args"] == {"start": "2026-03-01", "end": "2026-03-31"}
+    # Context threaded: turn 2's persisted state still carries turn 1's question.
+    history = " ".join(_to_text(m.content) for m in r2.messages)
+    assert "AWS spend in April?" in history and "and the month before?" in history
+    await client.aclose()
+
+
 class TestSynthesisInput:
     """Regression for the synthesizer dropping the specialists' findings.
 

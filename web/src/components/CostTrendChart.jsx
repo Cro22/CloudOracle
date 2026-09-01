@@ -11,7 +11,7 @@ import {
   Legend,
 } from 'recharts'
 import { useApi } from '../hooks/useApi'
-import { useRefresh } from '../context/RefreshContext'
+import { useRefresh } from '../context/refresh'
 import { colorForService, formatCurrency } from '../lib/theme'
 import { EmptyState, ErrorState, SkeletonBlock } from './UIStates'
 

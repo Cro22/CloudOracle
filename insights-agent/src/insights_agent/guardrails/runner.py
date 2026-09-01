@@ -38,16 +38,18 @@ async def run_guarded(
     graph: Any,
     question: str,
     *,
+    thread_id: str | None = None,
     validate: bool = True,
     judge_model: BaseChatModel | None = None,
 ) -> GuardedResult:
     """Run `question` through `graph` with validation + deterministic fallback.
 
     `judge_model` enables the LLM judge layer when supplied; pass None to use
-    only the deterministic grounding check.
+    only the deterministic grounding check. `thread_id` threads multi-turn
+    memory when the graph was compiled with a checkpointer.
     """
     try:
-        result = await ask_supervisor(graph, question)
+        result = await ask_supervisor(graph, question, thread_id=thread_id)
     except Exception as e:  # the run itself failed (quota, timeout, bug)
         return GuardedResult(
             answer=deterministic_answer(

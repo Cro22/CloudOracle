@@ -76,15 +76,16 @@ const (
 	// "snapshots" (the default approximation), "aws_cost_explorer" (real AWS
 	// billed cost via the Cost Explorer API), or "gcp_bigquery" (real GCP
 	// billed cost from the billing export in BigQuery).
-	BillingSnapshots       = "snapshots"
-	BillingAWSCostExplorer = "aws_cost_explorer"
-	BillingGCPBigQuery     = "gcp_bigquery"
+	BillingSnapshots           = "snapshots"
+	BillingAWSCostExplorer     = "aws_cost_explorer"
+	BillingGCPBigQuery         = "gcp_bigquery"
+	BillingAzureCostManagement = "azure_cost_management"
 )
 
 var (
 	validCloudProviders   = []string{providerSynthetic, providerAWS, providerGCP, providerAzure}
 	validLLMProviders     = []string{"gemini", "claude", "openai"}
-	validBillingProviders = []string{BillingSnapshots, BillingAWSCostExplorer, BillingGCPBigQuery}
+	validBillingProviders = []string{BillingSnapshots, BillingAWSCostExplorer, BillingGCPBigQuery, BillingAzureCostManagement}
 	validLogLevels        = []string{"debug", "info", "warn", "error"}
 	validLogFormats       = []string{"text", "json"}
 )
@@ -324,6 +325,10 @@ func (v *validator) crossFieldChecks(cfg *Config) {
 		if cfg.Cloud.GCPBillingTable == "" {
 			v.errorf("CLOUDORACLE_GCP_BILLING_TABLE is required when CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery")
 		}
+	}
+
+	if cfg.API.BillingProvider == BillingAzureCostManagement && cfg.Cloud.AzureSubID == "" {
+		v.errorf("AZURE_SUBSCRIPTION_ID is required when CLOUDORACLE_BILLING_PROVIDER=azure_cost_management")
 	}
 }
 

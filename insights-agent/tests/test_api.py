@@ -15,10 +15,12 @@ class FakeRunner:
     def __init__(self, result: GuardedResult) -> None:
         self._result = result
         self.queries: list[str] = []
+        self.threads: list[str | None] = []
         self.closed = False
 
-    async def ask(self, query: str) -> GuardedResult:
+    async def ask(self, query: str, thread_id: str | None = None) -> GuardedResult:
         self.queries.append(query)
+        self.threads.append(thread_id)
         return self._result
 
     async def aclose(self) -> None:
@@ -53,6 +55,16 @@ def test_ask_returns_answer_and_metadata() -> None:
     assert body["fallback_used"] is False
     assert body["validation"] == {"valid": True, "layer": "deterministic", "reason": ""}
     assert runner.queries == ["How much did I spend on AWS?"]
+    # No thread_id in the body → one-shot, forwarded as None.
+    assert runner.threads == [None]
+
+
+def test_ask_forwards_thread_id() -> None:
+    runner = FakeRunner(_ok_result())
+    with TestClient(create_app(runner=runner)) as c:
+        r = c.post("/ask", json={"query": "and last month?", "thread_id": "sess-1"})
+    assert r.status_code == 200
+    assert runner.threads == ["sess-1"]
 
 
 def test_ask_rejects_empty_query() -> None:

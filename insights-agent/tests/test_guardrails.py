@@ -131,7 +131,7 @@ class TestFallback:
 
 class TestRunGuarded:
     async def test_happy_path_no_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def fake_ask(graph: Any, q: str) -> AgentResult:
+        async def fake_ask(graph: Any, q: str, thread_id: str | None = None) -> AgentResult:
             return AgentResult(
                 answer="You spent $150 on AWS.",
                 tool_calls=[{"name": "cloudoracle_cost_summary", "args": {}}],
@@ -145,7 +145,7 @@ class TestRunGuarded:
         assert result.validation is not None and result.validation.valid
 
     async def test_exception_triggers_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def boom(graph: Any, q: str) -> AgentResult:
+        async def boom(graph: Any, q: str, thread_id: str | None = None) -> AgentResult:
             raise RuntimeError("gemini quota exceeded")
 
         monkeypatch.setattr(runner_mod, "ask_supervisor", boom)
@@ -155,7 +155,7 @@ class TestRunGuarded:
         assert "couldn't return a verified answer" in result.answer
 
     async def test_invalid_answer_triggers_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def fake_ask(graph: Any, q: str) -> AgentResult:
+        async def fake_ask(graph: Any, q: str, thread_id: str | None = None) -> AgentResult:
             return AgentResult(
                 answer="You spent $999 on AWS.",  # not in observations
                 tool_calls=[{"name": "cloudoracle_cost_summary", "args": {}}],
@@ -170,7 +170,7 @@ class TestRunGuarded:
         assert "150" in result.answer
 
     async def test_validation_disabled_skips_checks(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        async def fake_ask(graph: Any, q: str) -> AgentResult:
+        async def fake_ask(graph: Any, q: str, thread_id: str | None = None) -> AgentResult:
             return AgentResult(answer="$999 ungrounded", observations=[])
 
         monkeypatch.setattr(runner_mod, "ask_supervisor", fake_ask)

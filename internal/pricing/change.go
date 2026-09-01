@@ -8,6 +8,7 @@ import (
 
 	"CloudOracle/internal/iac"
 	"CloudOracle/internal/iac/aws"
+	"CloudOracle/internal/iac/azure"
 	"CloudOracle/internal/iac/gcp"
 )
 
@@ -148,10 +149,13 @@ func estimateState(ctx context.Context, src productGetter, resourceType string, 
 	if len(attrs) == 0 {
 		return Estimate{}, "no attributes for state", nil
 	}
-	// GCP resources price from the embedded static table and never touch the
-	// AWS Pricing API src, so they dispatch through their own path.
+	// GCP and Azure resources price from embedded static tables and never touch
+	// the AWS Pricing API src, so they dispatch through their own paths.
 	if strings.HasPrefix(resourceType, "google_") {
 		return estimateGCPState(resourceType, attrs, region)
+	}
+	if strings.HasPrefix(resourceType, "azurerm_") {
+		return estimateAzureState(resourceType, attrs, region)
 	}
 	ra, err := aws.Extract(resourceType, attrs)
 	if err != nil {
@@ -222,6 +226,35 @@ func estimateGCPState(resourceType string, attrs map[string]interface{}, region 
 		return est, "", err
 	case ra.CloudFunction != nil:
 		est, err := EstimateGCPCloudFunction(ra.CloudFunction)
+		return est, "", err
+	}
+	return Estimate{}, "unsupported resource type: " + resourceType, nil
+}
+
+// estimateAzureState is the Azure arm of estimateState: extract typed
+// attributes, dispatch to the static-table estimator. An unpriced VM size or
+// disk becomes a Skipped result (non-empty skipReason) rather than an error,
+// mirroring the AWS and GCP paths.
+func estimateAzureState(resourceType string, attrs map[string]interface{}, region string) (Estimate, string, error) {
+	ra, err := azure.Extract(resourceType, attrs)
+	if err != nil {
+		return Estimate{}, "", fmt.Errorf("extracting %s: %w", resourceType, err)
+	}
+	if ra == nil {
+		return Estimate{}, "unsupported resource type: " + resourceType, nil
+	}
+	switch {
+	case ra.VirtualMachine != nil:
+		est, err := EstimateAzureVirtualMachine(ra.VirtualMachine, region)
+		if errors.Is(err, errUnpricedAzureVMSize) {
+			return Estimate{}, err.Error(), nil
+		}
+		return est, "", err
+	case ra.ManagedDisk != nil:
+		est, err := EstimateAzureManagedDisk(ra.ManagedDisk)
+		if errors.Is(err, errUnpricedAzureDisk) {
+			return Estimate{}, err.Error(), nil
+		}
 		return est, "", err
 	}
 	return Estimate{}, "unsupported resource type: " + resourceType, nil

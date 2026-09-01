@@ -40,3 +40,6 @@ web/dist/
 !/internal/api/dist/.gitkeep
 
 .claude
+
+# Local-only explainer doc — not for the repo
+/docs/EXPLICACION-PARA-TODOS.md

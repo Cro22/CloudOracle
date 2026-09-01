@@ -1,5 +1,5 @@
 import { useApi } from '../hooks/useApi'
-import { useRefresh } from '../context/RefreshContext'
+import { useRefresh } from '../context/refresh'
 import { formatCurrency } from '../lib/theme'
 import { ErrorState, SkeletonBlock } from './UIStates'
 

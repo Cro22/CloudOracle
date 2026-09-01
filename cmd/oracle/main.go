@@ -719,6 +719,14 @@ func runServe(ctx context.Context, pool *db.Pool, cfg config.Config, args []stri
 			slog.Info("v1 cost endpoints using GCP BigQuery billing export (real billed cost)")
 			serverOpts = append(serverOpts, api.WithBillingSource(src))
 		}
+	case config.BillingAzureCostManagement:
+		src, err := billing.NewAzureCostManagementSource(runCtx, cfg.Cloud.AzureSubID)
+		if err != nil {
+			slog.Warn("falling back to snapshot cost source: Azure Cost Management init failed", "error", err)
+		} else {
+			slog.Info("v1 cost endpoints using Azure Cost Management (real billed cost)")
+			serverOpts = append(serverOpts, api.WithBillingSource(src))
+		}
 	}
 
 	server := api.NewServer(pool, cfg.API, serverOpts...)
