@@ -11,6 +11,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': 'http://localhost:8080',
+      // insights-agent (chat). Override its origin in prod via VITE_AGENT_BASE_URL.
+      '/ask': 'http://localhost:8099',
     },
   },
 })

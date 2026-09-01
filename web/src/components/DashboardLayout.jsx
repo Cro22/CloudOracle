@@ -3,6 +3,7 @@ import SummaryCards from './SummaryCards'
 import CostByServiceChart from './CostByServiceChart'
 import CostTrendChart from './CostTrendChart'
 import FindingsTable from './FindingsTable'
+import ChatWidget from './ChatWidget'
 import { useRefresh } from '../context/RefreshContext'
 
 function Logo() {
@@ -146,6 +147,8 @@ export default function DashboardLayout() {
             CloudOracle · built with Go · React · Recharts
           </footer>
         </main>
+
+        <ChatWidget />
       </div>
     </div>
   )
