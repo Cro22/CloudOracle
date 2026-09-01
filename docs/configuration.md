@@ -12,7 +12,7 @@ Reference for every environment variable CloudOracle reads. All vars are loaded 
 | `SYNTHETIC_COUNT` | `100` | Default number of synthetic resources to generate |
 | `SYNTHETIC_ACCOUNT` | `synthetic-account` | Default account ID for synthetic data |
 | `CLOUD_SERVICE_TIMEOUT` | `30s` | Per-service timeout for each cloud API call (Go duration string) |
-| `CLOUDORACLE_BILLING_PROVIDER` | `snapshots` | Cost source for the v1 endpoints: `snapshots` (the projected-cost approximation), `aws_cost_explorer` (real AWS unblended cost via the Cost Explorer API; uses `AWS_REGION`/`AWS_PROFILE`), or `gcp_bigquery` (real GCP net cost from the billing export in BigQuery; uses `GOOGLE_CLOUD_PROJECT` + the two `CLOUDORACLE_GCP_BILLING_*` vars below). On init failure it logs and falls back to `snapshots`. |
+| `CLOUDORACLE_BILLING_PROVIDER` | `snapshots` | Cost source for the v1 endpoints: `snapshots` (the projected-cost approximation), `aws_cost_explorer` (real AWS unblended cost via the Cost Explorer API; uses `AWS_REGION`/`AWS_PROFILE`), `gcp_bigquery` (real GCP net cost from the billing export in BigQuery; uses `GOOGLE_CLOUD_PROJECT` + the two `CLOUDORACLE_GCP_BILLING_*` vars below), or `azure_cost_management` (real Azure actual cost via the Cost Management Query API; uses `AZURE_SUBSCRIPTION_ID`). On init failure it logs and falls back to `snapshots`. |
 | `CLOUDORACLE_GCP_BILLING_DATASET` | _(unset)_ | BigQuery dataset holding the GCP billing export (required when `CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery`) |
 | `CLOUDORACLE_GCP_BILLING_TABLE` | _(unset)_ | Billing-export table name, e.g. `gcp_billing_export_v1_0123AB_CDEF45_6789GH` (required when `CLOUDORACLE_BILLING_PROVIDER=gcp_bigquery`) |
 | `DB_HOST`    | `localhost`   | PostgreSQL host       |

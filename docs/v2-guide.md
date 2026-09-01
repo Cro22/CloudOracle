@@ -128,7 +128,9 @@ The v2 prompt (in `internal/diff/narrative.go`) is purpose-built for PR review t
 
 **GCP** (priced from an embedded static table — see below): `google_compute_instance` (machine type + boot disk; Spot/preemptible priced at on-demand as a labeled upper bound), `google_compute_disk` (persistent disk), `google_sql_database_instance` (Cloud SQL PostgreSQL/MySQL — custom/shared/legacy tiers, storage, REGIONAL HA doubling; SQL Server is skipped because its licensing isn't modeled), `google_compute_router_nat` (Cloud NAT — external-IP standing cost only; per-VM uptime and data processing depend on runtime and aren't modeled), `google_cloudfunctions_function` / `google_cloudfunctions2_function` (Cloud Functions — surfaced at $0 standing since cost is invocation-based, mirroring Lambda).
 
-Unsupported types appear in the rendered comment under "Skipped" with a one-line reason — they don't fail the run. Adding a new AWS resource type is one new file under `internal/pricing/` plus a switch case in `change.go`; GCP types add an extractor under `internal/iac/gcp/` and an estimator that reads `internal/pricing/gcp_prices.json`.
+**Azure** (priced from an embedded static table, same approach as GCP): `azurerm_linux_virtual_machine` (VM size + OS disk; Spot priced at pay-as-you-go as a labeled upper bound), `azurerm_managed_disk` (managed disk — Standard HDD/SSD bill linearly by size; Premium/Ultra are approximated since they bill by provisioned tier). Windows VMs are skipped (license cost isn't modeled). The queryable upgrade path is the Azure Retail Prices API.
+
+Unsupported types appear in the rendered comment under "Skipped" with a one-line reason — they don't fail the run. Adding a new AWS resource type is one new file under `internal/pricing/` plus a switch case in `change.go`; GCP and Azure types add an extractor under `internal/iac/{gcp,azure}/` and an estimator that reads the matching `internal/pricing/{gcp,azure}_prices.json`.
 
 ### How GCP is priced
 
