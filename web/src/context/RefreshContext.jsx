@@ -1,10 +1,5 @@
-import { createContext, useCallback, useContext, useState } from 'react'
-
-export const RefreshContext = createContext({
-  refreshKey: 0,
-  refresh: () => {},
-  lastRefreshedAt: null,
-})
+import { useCallback, useState } from 'react'
+import { RefreshContext } from './refresh'
 
 export function RefreshProvider({ children }) {
   const [refreshKey, setRefreshKey] = useState(0)
@@ -20,8 +15,4 @@ export function RefreshProvider({ children }) {
       {children}
     </RefreshContext.Provider>
   )
-}
-
-export function useRefresh() {
-  return useContext(RefreshContext)
 }

@@ -4,7 +4,7 @@ import CostByServiceChart from './CostByServiceChart'
 import CostTrendChart from './CostTrendChart'
 import FindingsTable from './FindingsTable'
 import ChatWidget from './ChatWidget'
-import { useRefresh } from '../context/RefreshContext'
+import { useRefresh } from '../context/refresh'
 
 function Logo() {
   return (
