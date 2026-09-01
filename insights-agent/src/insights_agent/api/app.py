@@ -27,13 +27,17 @@ from insights_agent.logging import get_logger, setup
 class AgentRunner(Protocol):
     """Minimal interface the HTTP layer needs from an agent runtime."""
 
-    async def ask(self, query: str) -> GuardedResult: ...
+    async def ask(self, query: str, thread_id: str | None = None) -> GuardedResult: ...
 
     async def aclose(self) -> None: ...
 
 
 class AskRequest(BaseModel):
     query: str = Field(min_length=1, max_length=4000)
+    # Opaque conversation id. Reuse it across requests to keep context ("and
+    # last month?"); omit for a one-shot question. Multi-turn memory requires
+    # the server to have DATABASE_URL configured, else the id is ignored.
+    thread_id: str | None = Field(default=None, max_length=200)
 
 
 class ValidationModel(BaseModel):
@@ -105,7 +109,7 @@ def create_app(
             raise HTTPException(status_code=401, detail="invalid or missing X-API-Key")
 
         agent: AgentRunner = request.app.state.runner
-        result = await agent.ask(body.query)
+        result = await agent.ask(body.query, thread_id=body.thread_id)
         return AskResponse(
             answer=result.answer,
             tool_calls=result.tool_calls,

@@ -59,6 +59,7 @@ class GeminiAgentRunner:
 
     def __init__(self, settings: Settings, log: Any) -> None:
         self._settings = settings
+        self._log = log
         self._chat = GeminiProvider(
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
@@ -68,22 +69,63 @@ class GeminiAgentRunner:
             api_key=settings.cloudoracle_api_key,
             timeout_seconds=settings.http_timeout_seconds,
         )
-        tools: list[BaseTool] = list(build_tools(self._client))
+        self._tools: list[BaseTool] = list(build_tools(self._client))
         knowledge_tool = maybe_build_knowledge_tool(settings, log)
         if knowledge_tool is not None:
-            tools.append(knowledge_tool)
-        self._graph = build_supervisor_graph(self._chat, tools, settings.run_limits)
+            self._tools.append(knowledge_tool)
+        # Stateless graph for single-shot asks (CLI, and any request without a
+        # thread_id). The checkpointed graph is built lazily on the first
+        # threaded ask so a runner with no DB never touches Postgres.
+        self._graph = build_supervisor_graph(self._chat, self._tools, settings.run_limits)
+        self._checkpointer_cm: Any = None
+        self._threaded: Any = None
 
-    async def ask(self, query: str) -> GuardedResult:
+    async def _threaded_graph(self) -> Any:
+        """Lazily build the checkpointed graph, or None when no DB is configured.
+
+        The AsyncPostgresSaver owns a connection, so it lives for the runner's
+        lifetime (entered here, closed in aclose) rather than per-request.
+        """
+        if self._threaded is not None:
+            return self._threaded
+        if not self._settings.database_url:
+            return None
+
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+        # ponytail: single connection via from_conn_string — fine for the
+        # current load. Swap to AsyncConnectionPool if concurrent threaded asks
+        # ever contend on it.
+        self._checkpointer_cm = AsyncPostgresSaver.from_conn_string(
+            self._settings.database_url
+        )
+        saver = await self._checkpointer_cm.__aenter__()
+        await saver.setup()  # idempotent: creates the checkpoint tables once
+        self._threaded = build_supervisor_graph(
+            self._chat, self._tools, self._settings.run_limits, checkpointer=saver
+        )
+        self._log.info("agent.memory.enabled", backend="postgres")
+        return self._threaded
+
+    async def ask(self, query: str, thread_id: str | None = None) -> GuardedResult:
+        graph = self._graph
+        if thread_id:
+            threaded = await self._threaded_graph()
+            if threaded is not None:
+                graph = threaded
         return await run_guarded(
-            self._graph,
+            graph,
             query,
+            thread_id=thread_id,
             validate=self._settings.enable_answer_validation,
             judge_model=self._chat if self._settings.enable_llm_judge else None,
         )
 
     async def aclose(self) -> None:
         await self._client.aclose()
+        if self._checkpointer_cm is not None:
+            await self._checkpointer_cm.__aexit__(None, None, None)
+            self._checkpointer_cm = None
 
     async def __aenter__(self) -> GeminiAgentRunner:
         return self

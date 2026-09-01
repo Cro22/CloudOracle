@@ -129,13 +129,19 @@ uv run insights-agent-serve            # binds AGENT_HOST:AGENT_PORT (default 12
 | Method & path | Body | Response |
 | ------------- | ---- | -------- |
 | `GET /health` | —    | `{"status": "ok"}` |
-| `POST /ask`   | `{"query": "..."}` | `{"answer", "tool_calls", "fallback_used", "validation"}` |
+| `POST /ask`   | `{"query": "...", "thread_id"?: "..."}` | `{"answer", "tool_calls", "fallback_used", "validation"}` |
 
 ```bash
 curl -sS -X POST localhost:8099/ask \
      -H 'Content-Type: application/json' \
      -d '{"query": "How much did I spend on AWS in April 2026?"}'
 ```
+
+Pass an optional `thread_id` to keep conversation context across requests
+(follow-ups like "and the month before?"). Multi-turn memory is persisted with
+LangGraph's `AsyncPostgresSaver` and requires `DATABASE_URL` to be set (the same
+Postgres the RAG store uses); without it the `thread_id` is accepted but
+ignored and each request is one-shot.
 
 Set `AGENT_API_KEY` to require an `X-API-Key` header on `POST /ask` (same
 convention as the Go server); leave it empty for an open local endpoint. The

@@ -24,7 +24,6 @@ terminates.
 from __future__ import annotations
 
 import json
-import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, TypedDict
@@ -91,9 +90,15 @@ DEFAULT_LIMITS = RunLimits()
 
 
 class SupervisorState(TypedDict):
+    # messages accumulate across a thread (add_messages) so a checkpointer gives
+    # multi-turn context. The per-run accounting below is deliberately *not* an
+    # accumulating channel: it's plain LastValue, so seeding [] / 0 at the start
+    # of each turn resets it and the run-wide caps apply to this turn alone, not
+    # the whole thread's history. Workers therefore return the accumulated list
+    # (prior value + their own), not a delta.
     messages: Annotated[list[BaseMessage], add_messages]
-    tool_calls: Annotated[list[dict[str, Any]], operator.add]
-    observations: Annotated[list[dict[str, Any]], operator.add]
+    tool_calls: list[dict[str, Any]]
+    observations: list[dict[str, Any]]
     route: str
     hops: int
 
@@ -102,8 +107,14 @@ def build_supervisor_graph(
     llm: BaseChatModel,
     tools: Sequence[BaseTool],
     limits: RunLimits = DEFAULT_LIMITS,
+    checkpointer: Any = None,
 ) -> Any:
-    """Compile the supervisor graph over `tools` (the same flat tool list)."""
+    """Compile the supervisor graph over `tools` (the same flat tool list).
+
+    Pass a `checkpointer` (e.g. AsyncPostgresSaver) to persist per-thread state
+    so multi-turn conversations keep context; leave it None for stateless
+    single-shot runs (the CLI default and every test that doesn't thread).
+    """
     tool_list = list(tools)
     routing_tools = _build_routing_tools()
 
@@ -149,20 +160,26 @@ def build_supervisor_graph(
     for name in WORKER_NAMES:
         graph.add_edge(name, "supervisor")
     graph.add_edge("synthesize", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def _synthesis_input(messages: Sequence[BaseMessage]) -> HumanMessage:
     """Build the synthesizer's input: the user question plus the specialists'
-    findings, as a single human turn the model answers fresh."""
-    question = ""
-    for m in messages:
+    findings, as a single human turn the model answers fresh.
+
+    Multi-turn safe: the *current* question is the last HumanMessage (with a
+    checkpointer the thread carries earlier turns too), and only the findings
+    produced after it — i.e. this turn's workers — are synthesized. Earlier
+    turns' worker messages remain in the transcript for context but must not be
+    re-synthesized as if fresh."""
+    last_human = -1
+    for i, m in enumerate(messages):
         if isinstance(m, HumanMessage):
-            question = _stringify_content(m.content)
-            break
+            last_human = i
+    question = _stringify_content(messages[last_human].content) if last_human >= 0 else ""
 
     findings: list[str] = []
-    for m in messages:
+    for m in messages[last_human + 1 :]:
         if isinstance(m, AIMessage) and getattr(m, "name", None) in WORKER_NAMES:
             text = _stringify_content(m.content).strip()
             if text and text != "(no findings)":
@@ -178,8 +195,18 @@ def _synthesis_input(messages: Sequence[BaseMessage]) -> HumanMessage:
     )
 
 
-async def ask_supervisor(graph: Any, question: str) -> AgentResult:
-    """Run one question through the supervisor graph and return a compact result."""
+async def ask_supervisor(
+    graph: Any, question: str, thread_id: str | None = None
+) -> AgentResult:
+    """Run one question through the supervisor graph and return a compact result.
+
+    When `thread_id` is set and the graph was compiled with a checkpointer, the
+    thread's prior messages are loaded and the new question is appended, giving
+    multi-turn context ("and what about last month?"). The per-turn accounting
+    channels are reset via _RESET so the run-wide caps apply to this turn alone,
+    not the whole thread's history.
+    """
+    config = {"configurable": {"thread_id": thread_id}} if thread_id else None
     state: dict[str, Any] = await graph.ainvoke(
         {
             "messages": [HumanMessage(content=question)],
@@ -187,7 +214,8 @@ async def ask_supervisor(graph: Any, question: str) -> AgentResult:
             "observations": [],
             "route": "",
             "hops": 0,
-        }
+        },
+        config=config,
     )
 
     messages: list[Any] = state.get("messages", [])
@@ -223,10 +251,12 @@ def _make_worker_node(
             tool_budget=max(0, remaining),
         )
         contribution = AIMessage(content=answer or "(no findings)", name=name)
+        # tool_calls/observations are LastValue channels (see SupervisorState),
+        # so return the accumulated list, not just this worker's delta.
         return {
             "messages": [contribution],
-            "tool_calls": calls,
-            "observations": observations,
+            "tool_calls": state["tool_calls"] + calls,
+            "observations": state["observations"] + observations,
         }
 
     return node
